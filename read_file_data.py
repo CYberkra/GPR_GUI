@@ -8,6 +8,7 @@ Includes NaN-trace handling (all-NaN columns -> 0) + nan_to_num.
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import re
 
 
 def _handle_nan_traces(arr: np.ndarray) -> np.ndarray:
@@ -21,9 +22,55 @@ def _handle_nan_traces(arr: np.ndarray) -> np.ndarray:
     return np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
 
 
+_HEADER_KEYS = [
+    "Number of Samples",
+    "Time windows",
+    "Number of Traces",
+    "Trace interval",
+]
+
+
+def _parse_header_lines(lines):
+    if len(lines) < 4:
+        return None
+    info = {}
+    for line in lines[:4]:
+        if "=" not in line:
+            return None
+        left, right = line.split("=", 1)
+        key = left.strip()
+        m = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", right)
+        if not m:
+            return None
+        try:
+            val = float(m.group(0))
+        except ValueError:
+            return None
+        info[key] = val
+    if not all(k in info for k in _HEADER_KEYS):
+        return None
+    return {
+        "a_scan_length": int(info["Number of Samples"]),
+        "total_time_ns": float(info["Time windows"]),
+        "num_traces": int(info["Number of Traces"]),
+        "trace_interval_m": float(info["Trace interval"]),
+    }
+
+
+def _detect_header(path: str):
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = [f.readline().strip() for _ in range(4)]
+    except OSError:
+        return None
+    return _parse_header_lines(lines)
+
+
 def readcsv(path: str) -> np.ndarray:
-    # Read numeric CSV, no header
-    df = pd.read_csv(path, header=None)
+    # Read numeric CSV, auto-skip 4-line header if present
+    header_info = _detect_header(path)
+    skiprows = 4 if header_info else 0
+    df = pd.read_csv(path, header=None, skiprows=skiprows)
     arr = df.values.astype(float)
     return _handle_nan_traces(arr)
 

@@ -13,6 +13,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 
 import numpy as np
+import re
 
 # matplotlib for B-scan
 import matplotlib
@@ -41,6 +42,50 @@ METHODS = [
 ]
 
 
+_HEADER_KEYS = [
+    "Number of Samples",
+    "Time windows",
+    "Number of Traces",
+    "Trace interval",
+]
+
+
+def _parse_header_lines(lines):
+    if len(lines) < 4:
+        return None
+    info = {}
+    for line in lines[:4]:
+        if "=" not in line:
+            return None
+        left, right = line.split("=", 1)
+        key = left.strip()
+        m = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", right)
+        if not m:
+            return None
+        try:
+            val = float(m.group(0))
+        except ValueError:
+            return None
+        info[key] = val
+    if not all(k in info for k in _HEADER_KEYS):
+        return None
+    return {
+        "a_scan_length": int(info["Number of Samples"]),
+        "total_time_ns": float(info["Time windows"]),
+        "num_traces": int(info["Number of Traces"]),
+        "trace_interval_m": float(info["Trace interval"]),
+    }
+
+
+def detect_csv_header(path: str):
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = [f.readline().strip() for _ in range(4)]
+    except OSError:
+        return None
+    return _parse_header_lines(lines)
+
+
 class GPRGui(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -49,6 +94,7 @@ class GPRGui(tk.Tk):
 
         self.data = None
         self.data_path = None
+        self.header_info = None
 
         # UI layout
         left = tk.Frame(self)
@@ -95,12 +141,27 @@ class GPRGui(tk.Tk):
         if not path:
             return
         try:
-            data = np.loadtxt(path, delimiter=",")
+            header_info = detect_csv_header(path)
+            if header_info:
+                data = np.loadtxt(path, delimiter=",", skiprows=4)
+            else:
+                data = np.loadtxt(path, delimiter=",")
             if data.ndim == 1:
                 data = data.reshape(-1, 1)
             self.data = data
             self.data_path = path
+            self.header_info = header_info
             self._log(f"Loaded CSV: {path}  shape={data.shape}")
+            if header_info:
+                self._log(
+                    "Header detected: "
+                    f"A-scan length={header_info['a_scan_length']} samples; "
+                    f"Total time={header_info['total_time_ns']} ns; "
+                    f"A-scan count={header_info['num_traces']}; "
+                    f"Trace interval={header_info['trace_interval_m']} m"
+                )
+            else:
+                self._log("No header metadata detected; using index axes.")
             self.plot_data(data)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load CSV: {e}")
@@ -108,10 +169,21 @@ class GPRGui(tk.Tk):
 
     def plot_data(self, data: np.ndarray):
         self.ax.clear()
-        self.ax.imshow(data, cmap="gray", aspect="auto")
+        extent = None
+        if self.header_info:
+            num_traces = max(1, int(self.header_info["num_traces"]))
+            trace_interval = float(self.header_info["trace_interval_m"])
+            total_time = float(self.header_info["total_time_ns"])
+            distance_end = trace_interval * (num_traces - 1)
+            extent = [0.0, distance_end, total_time, 0.0]
+            self.ax.set_xlabel("Distance (m)")
+            self.ax.set_ylabel("Time (ns)")
+        else:
+            self.ax.set_xlabel("Distance (trace index)")
+            self.ax.set_ylabel("Time (sample index)")
+
+        self.ax.imshow(data, cmap="gray", aspect="auto", extent=extent)
         self.ax.set_title("B-scan")
-        self.ax.set_xlabel("Distance (trace index)")
-        self.ax.set_ylabel("Time (sample index)")
         self.canvas.draw()
 
     def apply_method(self):
