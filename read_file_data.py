@@ -66,10 +66,41 @@ def _detect_header(path: str):
     return _parse_header_lines(lines)
 
 
+def _is_numeric_row(line: str) -> bool:
+    # Determine if a CSV row is fully numeric (ignoring empty fields)
+    parts = [p.strip() for p in line.split(",")]
+    has_num = False
+    for p in parts:
+        if p == "":
+            continue
+        try:
+            float(p)
+            has_num = True
+        except ValueError:
+            return False
+    return has_num
+
+
+def _detect_skiprows(path: str, max_lines: int = 10) -> int:
+    # Count leading non-numeric rows (header/meta lines)
+    skip = 0
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            for _ in range(max_lines):
+                line = f.readline()
+                if not line:
+                    break
+                if _is_numeric_row(line.strip()):
+                    break
+                skip += 1
+    except OSError:
+        return 0
+    return skip
+
+
 def readcsv(path: str) -> np.ndarray:
-    # Read numeric CSV, auto-skip 4-line header if present
-    header_info = _detect_header(path)
-    skiprows = 4 if header_info else 0
+    # Read numeric CSV, auto-skip header/meta lines if present
+    skiprows = _detect_skiprows(path)
     df = pd.read_csv(path, header=None, skiprows=skiprows)
     arr = df.values.astype(float)
     return _handle_nan_traces(arr)
