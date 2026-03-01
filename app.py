@@ -17,6 +17,9 @@ import numpy as np
 # matplotlib for B-scan
 import matplotlib
 matplotlib.use("TkAgg")
+import matplotlib.pyplot as plt
+plt.rcParams['font.sans-serif'] = ['SimHei']
+plt.rcParams['axes.unicode_minus'] = False
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 

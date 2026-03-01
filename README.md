@@ -27,6 +27,15 @@ From repo root:
 python app.py
 ```
 
+
+## Sample data
+- Example B-scan CSV: `sample_data/sample_bscan.csv`
+
+How to verify:
+1) Run `python app.py`
+2) Click **Import CSV** and select `sample_data/sample_bscan.csv`
+3) The B-scan should render in the right panel
+
 ## Notes
 - Output CSV/PNG are saved under `output/` in this repo.
 - Default parameters are minimal placeholders; adjust inside `app.py` as needed.
