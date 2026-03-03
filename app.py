@@ -366,24 +366,21 @@ class GPRGui(tk.Tk):
             padx=10,
             pady=6,
         )
+        icon_btn_style = dict(btn_style, compound="left", anchor="w", padx=12, pady=6)
 
         tk.Button(
             left,
             text="Import CSV",
             command=self.load_csv,
-            width=22,
             image=self.icons.get("import"),
-            compound="left",
-            **btn_style,
+            **icon_btn_style,
         ).pack(pady=5)
         tk.Button(
             left,
             text="Apply Selected Method",
             command=self.apply_method,
-            width=22,
             image=self.icons.get("apply"),
-            compound="left",
-            **btn_style,
+            **icon_btn_style,
         ).pack(pady=5)
 
         tk.Label(left, text="Methods").pack(pady=(15, 5))
@@ -409,20 +406,16 @@ class GPRGui(tk.Tk):
             left,
             text="Run Batch Compare",
             command=self.run_batch,
-            width=22,
             image=self.icons.get("batch"),
-            compound="left",
-            **btn_style,
+            **icon_btn_style,
         ).pack(pady=4)
 
         tk.Button(
             left,
             text="Generate Report",
             command=self.generate_report,
-            width=22,
             image=self.icons.get("report"),
-            compound="left",
-            **btn_style,
+            **icon_btn_style,
         ).pack(pady=4)
 
         self.symmetric_var = tk.BooleanVar(value=False)
