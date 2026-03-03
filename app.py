@@ -288,10 +288,50 @@ PROCESSING_METHODS = {
 class GPRGui(tk.Tk):
     def __init__(self):
         super().__init__()
+        self.colors = {
+            "bg": "#F3F5F7",
+            "panel": "#FFFFFF",
+            "panel_alt": "#FAFBFC",
+            "border": "#D7DEE5",
+            "text": "#1F2937",
+            "muted": "#6B7280",
+            "accent": "#3B82F6",
+            "button_hover": "#EEF2F7",
+        }
+        self.configure(bg=self.colors["bg"])
+        self.option_add("*Font", ("Segoe UI", 10))
+        self.option_add("*Background", self.colors["bg"])
+        self.option_add("*Foreground", self.colors["text"])
+        self.option_add("*Frame.Background", self.colors["panel"])
+        self.option_add("*Button.Background", self.colors["panel"])
+        self.option_add("*Button.Foreground", self.colors["text"])
+        self.option_add("*Button.ActiveBackground", self.colors["button_hover"])
+        self.option_add("*Button.ActiveForeground", self.colors["text"])
+        self.option_add("*Checkbutton.Background", self.colors["panel"])
+        self.option_add("*Checkbutton.Foreground", self.colors["text"])
+        self.option_add("*Listbox.Background", self.colors["panel"])
+        self.option_add("*Listbox.Foreground", self.colors["text"])
+        self.option_add("*Entry.Background", self.colors["panel"])
+        self.option_add("*Entry.Foreground", self.colors["text"])
+
+        style = ttk.Style()
         try:
-            ttk.Style().theme_use("clam")
+            style.theme_use("clam")
         except Exception:
             pass
+        style.configure("TFrame", background=self.colors["panel"])
+        style.configure("TLabel", background=self.colors["panel"], foreground=self.colors["text"])
+        style.configure("TLabelframe", background=self.colors["panel"], foreground=self.colors["text"])
+        style.configure("TLabelframe.Label", background=self.colors["panel"], foreground=self.colors["muted"])
+        style.configure("TCombobox", fieldbackground=self.colors["panel"], background=self.colors["panel"])
+        style.configure("TCheckbutton", background=self.colors["panel"], foreground=self.colors["text"])
+        style.configure("TButton", background=self.colors["panel"], foreground=self.colors["text"], padding=6)
+        style.map("TButton", background=[("active", self.colors["button_hover"])])
+
+        self._load_icons()
+        if self.icons.get("app"):
+            self.iconphoto(True, self.icons["app"])
+
         self.title("GPR GUI - Enhanced")
         self.geometry("1200x760")
 
@@ -299,13 +339,52 @@ class GPRGui(tk.Tk):
         self.data_path = None
         self.header_info = None
 
-        left = tk.Frame(self)
+        left = tk.Frame(
+            self,
+            bg=self.colors["panel"],
+            highlightthickness=1,
+            highlightbackground=self.colors["border"],
+        )
         left.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=10, pady=10)
-        right = tk.Frame(self)
+        right = tk.Frame(
+            self,
+            bg=self.colors["panel_alt"],
+            highlightthickness=1,
+            highlightbackground=self.colors["border"],
+        )
         right.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        tk.Button(left, text="Import CSV", command=self.load_csv, width=22).pack(pady=5)
-        tk.Button(left, text="Apply Selected Method", command=self.apply_method, width=22).pack(pady=5)
+        btn_style = dict(
+            bg=self.colors["panel"],
+            fg=self.colors["text"],
+            activebackground=self.colors["button_hover"],
+            activeforeground=self.colors["text"],
+            bd=0,
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=self.colors["border"],
+            padx=10,
+            pady=6,
+        )
+
+        tk.Button(
+            left,
+            text="Import CSV",
+            command=self.load_csv,
+            width=22,
+            image=self.icons.get("import"),
+            compound="left",
+            **btn_style,
+        ).pack(pady=5)
+        tk.Button(
+            left,
+            text="Apply Selected Method",
+            command=self.apply_method,
+            width=22,
+            image=self.icons.get("apply"),
+            compound="left",
+            **btn_style,
+        ).pack(pady=5)
 
         tk.Label(left, text="Methods").pack(pady=(15, 5))
         self.method_combo = ttk.Combobox(left, state="readonly", width=30)
@@ -326,9 +405,25 @@ class GPRGui(tk.Tk):
         for name in self.method_combo["values"]:
             self.batch_list.insert(tk.END, name)
         self.batch_list.pack(pady=2)
-        tk.Button(left, text="Run Batch Compare", command=self.run_batch, width=22).pack(pady=4)
+        tk.Button(
+            left,
+            text="Run Batch Compare",
+            command=self.run_batch,
+            width=22,
+            image=self.icons.get("batch"),
+            compound="left",
+            **btn_style,
+        ).pack(pady=4)
 
-        tk.Button(left, text="Generate Report", command=self.generate_report, width=22).pack(pady=4)
+        tk.Button(
+            left,
+            text="Generate Report",
+            command=self.generate_report,
+            width=22,
+            image=self.icons.get("report"),
+            compound="left",
+            **btn_style,
+        ).pack(pady=4)
 
         self.symmetric_var = tk.BooleanVar(value=False)
         self.symm_check = tk.Checkbutton(
@@ -480,6 +575,24 @@ class GPRGui(tk.Tk):
                 maxv = 1e-6
             out = out / maxv
         return out
+
+    def _load_icons(self):
+        self.icons = {}
+        icon_dir = os.path.join(BASE_DIR, "assets")
+        icon_files = {
+            "app": "icon-app.png",
+            "import": "icon-import.png",
+            "apply": "icon-apply.png",
+            "batch": "icon-batch.png",
+            "report": "icon-report.png",
+        }
+        for key, filename in icon_files.items():
+            path = os.path.join(icon_dir, filename)
+            if os.path.exists(path):
+                try:
+                    self.icons[key] = tk.PhotoImage(file=path)
+                except tk.TclError:
+                    pass
 
     def _parse_float(self, text: str):
         try:
