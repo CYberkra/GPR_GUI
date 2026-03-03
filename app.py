@@ -82,10 +82,10 @@ def detect_csv_header(path: str):
     return _parse_header_lines(lines)
 
 
-# ============ 研究方法实现 ============
+# ============ Methods (research) ============
 
 def method_svd_background(data, rank=1, **kwargs):
-    """SVD背景抑制 - 去除前rank个奇异值"""
+    """SVD background removal - remove top-r singular values"""
     U, S, Vt = svd(data, full_matrices=False)
     S_bg = np.zeros_like(S)
     S_bg[:rank] = S[:rank]
@@ -94,7 +94,7 @@ def method_svd_background(data, rank=1, **kwargs):
 
 
 def method_fk_filter(data, angle_low=10, angle_high=65, taper_width=5, **kwargs):
-    """F-K域极角滤波"""
+    """F-K cone filter"""
     F = fftshift(fft2(data))
     ny, nx = F.shape
     ky = np.fft.fftfreq(ny)
@@ -126,7 +126,7 @@ def method_fk_filter(data, angle_low=10, angle_high=65, taper_width=5, **kwargs)
 
 
 def method_hankel_svd(data, window_length=None, rank=None, **kwargs):
-    """Hankel矩阵SVD去噪"""
+    """Hankel SVD denoising"""
     ny, nx = data.shape
     if window_length is None or window_length <= 0:
         window_length = ny // 4
@@ -164,102 +164,102 @@ def method_hankel_svd(data, window_length=None, rank=None, **kwargs):
 
 
 def method_sliding_average(data, window_size=10, axis=1, **kwargs):
-    """滑动平均背景抑制"""
+    """Sliding-average background removal"""
     background = uniform_filter1d(data, size=window_size, axis=axis, mode='nearest')
     return data - background, background
 
 
-# ============ 方法注册表 ============
+# ============ Method registry ============
 
 PROCESSING_METHODS = {
-    # 原有方法（PythonModule_core）
+    # Original methods (PythonModule_core)
     "compensatingGain": {
-        "name": "0 compensatingGain.py（人工补偿增益）",
+        "name": "0 compensatingGain (manual gain compensation)",
         "type": "core",
         "module": "compensatingGain",
         "func": "compensatingGain",
         "params": [
-            {"name": "gain_min", "label": "增益最小值", "type": "float", "default": 1.0, "min": 0.1, "max": 20.0},
-            {"name": "gain_max", "label": "增益最大值", "type": "float", "default": 6.0, "min": 0.1, "max": 50.0},
+            {"name": "gain_min", "label": "Gain min", "type": "float", "default": 1.0, "min": 0.1, "max": 20.0},
+            {"name": "gain_max", "label": "Gain max", "type": "float", "default": 6.0, "min": 0.1, "max": 50.0},
         ],
     },
     "dewow": {
-        "name": "1 dewow.py（低频漂移矫正）",
+        "name": "1 dewow (low-frequency drift correction)",
         "type": "core",
         "module": "dewow",
         "func": "dewow",
         "params": [
-            {"name": "window", "label": "窗宽 (samples)", "type": "int", "default": 31, "min": 1, "max": 1000},
+            {"name": "window", "label": "Window (samples)", "type": "int", "default": 31, "min": 1, "max": 1000},
         ],
     },
     "set_zero_time": {
-        "name": "2 set_zero_time.py（零时矫正）",
+        "name": "2 set_zero_time (zero-time correction)",
         "type": "core",
         "module": "set_zero_time",
         "func": "set_zero_time",
         "params": [
-            {"name": "new_zero_time", "label": "零时位置 (ns)", "type": "float", "default": 5.0, "min": 0.0, "max": 1000.0},
+            {"name": "new_zero_time", "label": "Zero-time (ns)", "type": "float", "default": 5.0, "min": 0.0, "max": 1000.0},
         ],
     },
     "agcGain": {
-        "name": "3 agcGain.py（增益补偿矫正）",
+        "name": "3 agcGain (AGC correction)",
         "type": "core",
         "module": "agcGain",
         "func": "agcGain",
         "params": [
-            {"name": "window", "label": "窗宽 (samples)", "type": "int", "default": 31, "min": 1, "max": 1000},
+            {"name": "window", "label": "Window (samples)", "type": "int", "default": 31, "min": 1, "max": 1000},
         ],
     },
     "subtracting_average_2D": {
-        "name": "4 subtracting_average_2D.py（背景抑制）",
+        "name": "4 subtracting_average_2D (background removal)",
         "type": "core",
         "module": "subtracting_average_2D",
         "func": "subtracting_average_2D",
         "params": [],
     },
     "running_average_2D": {
-        "name": "5 running_average_2D.py（尖锐杂波抑制）",
+        "name": "5 running_average_2D (spike clutter suppression)",
         "type": "core",
         "module": "running_average_2D",
         "func": "running_average_2D",
         "params": [],
     },
 
-    # 调研方法（本地实现）
+    # Research methods (local)
     "svd_bg": {
-        "name": "SVD背景抑制 (低秩去除)",
+        "name": "SVD background removal (low-rank)",
         "type": "local",
         "func": method_svd_background,
         "params": [
-            {"name": "rank", "label": "秩 (去除前rank个)", "type": "int", "default": 1, "min": 1, "max": 20},
+            {"name": "rank", "label": "Rank (remove top r)", "type": "int", "default": 1, "min": 1, "max": 20},
         ],
     },
     "fk_filter": {
-        "name": "F-K域极角滤波",
+        "name": "F-K cone filter",
         "type": "local",
         "func": method_fk_filter,
         "params": [
-            {"name": "angle_low", "label": "阻带起始角度 (°)", "type": "int", "default": 10, "min": 0, "max": 90},
-            {"name": "angle_high", "label": "阻带结束角度 (°)", "type": "int", "default": 65, "min": 0, "max": 90},
-            {"name": "taper_width", "label": "过渡带宽度 (°)", "type": "int", "default": 5, "min": 0, "max": 20},
+            {"name": "angle_low", "label": "Stopband start angle (°)", "type": "int", "default": 10, "min": 0, "max": 90},
+            {"name": "angle_high", "label": "Stopband end angle (°)", "type": "int", "default": 65, "min": 0, "max": 90},
+            {"name": "taper_width", "label": "Taper width (°)", "type": "int", "default": 5, "min": 0, "max": 20},
         ],
     },
     "hankel_svd": {
-        "name": "Hankel矩阵SVD去噪",
+        "name": "Hankel SVD denoising",
         "type": "local",
         "func": method_hankel_svd,
         "params": [
-            {"name": "window_length", "label": "窗口长度 (0=自动)", "type": "int", "default": 0, "min": 0, "max": 2000},
-            {"name": "rank", "label": "保留秩 (0=自动)", "type": "int", "default": 0, "min": 0, "max": 100},
+            {"name": "window_length", "label": "Window length (0=auto)", "type": "int", "default": 0, "min": 0, "max": 2000},
+            {"name": "rank", "label": "Rank kept (0=auto)", "type": "int", "default": 0, "min": 0, "max": 100},
         ],
     },
     "sliding_avg": {
-        "name": "滑动平均背景抑制",
+        "name": "Sliding-average background removal",
         "type": "local",
         "func": method_sliding_average,
         "params": [
-            {"name": "window_size", "label": "滑动窗口大小", "type": "int", "default": 10, "min": 1, "max": 200},
-            {"name": "axis", "label": "沿轴(0/1)", "type": "int", "default": 1, "min": 0, "max": 1},
+            {"name": "window_size", "label": "Window size", "type": "int", "default": 10, "min": 1, "max": 200},
+            {"name": "axis", "label": "Axis (0/1)", "type": "int", "default": 1, "min": 0, "max": 1},
         ],
     },
 }
@@ -268,6 +268,10 @@ PROCESSING_METHODS = {
 class GPRGui(tk.Tk):
     def __init__(self):
         super().__init__()
+        try:
+            ttk.Style().theme_use("clam")
+        except Exception:
+            pass
         self.title("GPR GUI - Enhanced")
         self.geometry("1200x760")
 
