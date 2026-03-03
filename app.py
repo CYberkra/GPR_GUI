@@ -15,6 +15,7 @@ from tkinter import filedialog, messagebox, ttk
 import numpy as np
 import pandas as pd
 import re
+from datetime import datetime
 
 # matplotlib for B-scan
 import matplotlib
@@ -319,6 +320,15 @@ class GPRGui(tk.Tk):
         self.param_frame.pack(fill=tk.X, pady=5)
         self.param_vars = {}
         self._render_params(self.method_keys[0])
+
+        tk.Label(left, text="Batch (multi-select)").pack(pady=(10, 2))
+        self.batch_list = tk.Listbox(left, selectmode=tk.MULTIPLE, height=6, width=30)
+        for name in self.method_combo["values"]:
+            self.batch_list.insert(tk.END, name)
+        self.batch_list.pack(pady=2)
+        tk.Button(left, text="Run Batch Compare", command=self.run_batch, width=22).pack(pady=4)
+
+        tk.Button(left, text="Generate Report", command=self.generate_report, width=22).pack(pady=4)
 
         self.symmetric_var = tk.BooleanVar(value=False)
         self.symm_check = tk.Checkbutton(
@@ -821,6 +831,145 @@ class GPRGui(tk.Tk):
             cmap=self._get_colormap(),
         )
         return out_csv, out_png
+
+    def run_batch(self):
+        if self.data is None or self.data_path is None:
+            messagebox.showwarning("No data", "Please import a CSV first.")
+            return
+        selected = self.batch_list.curselection()
+        if not selected:
+            messagebox.showwarning("No selection", "Please select methods for batch processing.")
+            return
+
+        base_data = self.data
+        last_data = None
+        for idx in selected:
+            method_key = self.method_keys[idx]
+            method = PROCESSING_METHODS[method_key]
+            self._log(f"Batch: {method['name']}")
+
+            params = {}
+            for p in method.get("params", []):
+                params[p["name"]] = p.get("default")
+
+            try:
+                if method["type"] == "core":
+                    mod = __import__(method["module"])
+                    func = getattr(mod, method["func"])
+                    length_trace = base_data.shape[0]
+                    start_position = 0
+                    end_position = base_data.shape[1]
+                    scans_per_meter = 1
+
+                    temp_in_csv = os.path.join(BASE_DIR, "output", "temp_in.csv")
+                    savecsv(base_data, temp_in_csv)
+
+                    out_dir = os.path.join(BASE_DIR, "output")
+                    os.makedirs(out_dir, exist_ok=True)
+                    out_csv = os.path.join(out_dir, f"{method_key}_out.csv")
+                    out_png = os.path.join(out_dir, f"{method_key}_out.png")
+
+                    if method_key == "compensatingGain":
+                        gain_min = float(params.get("gain_min", 1.0))
+                        gain_max = float(params.get("gain_max", 6.0))
+                        gain_func = np.linspace(gain_min, gain_max, base_data.shape[0]).tolist()
+                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, end_position, gain_func)
+                    elif method_key == "dewow":
+                        window = int(params.get("window", max(1, length_trace // 4)))
+                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter, window)
+                    elif method_key == "set_zero_time":
+                        new_zero_time = float(params.get("new_zero_time", 5.0))
+                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter, new_zero_time)
+                    elif method_key == "agcGain":
+                        window = int(params.get("window", max(1, length_trace // 4)))
+                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter, window)
+                    elif method_key == "subtracting_average_2D":
+                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter)
+                    elif method_key == "running_average_2D":
+                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter)
+                    else:
+                        self._log("Unknown core method; skipped.")
+                        continue
+
+                    if os.path.exists(out_csv):
+                        newdata_df = pd.read_csv(out_csv, header=None)
+                        newdata = newdata_df.values
+                        if newdata.ndim == 1:
+                            newdata = newdata.reshape(-1, 1)
+                        last_data = newdata
+                        self._save_outputs(newdata, method_key)
+                        self._log(f"Batch saved: {out_csv}")
+                else:
+                    result = method["func"](base_data, **params)
+                    newdata = result[0] if isinstance(result, tuple) else result
+                    last_data = newdata
+                    out_csv, _ = self._save_outputs(newdata, method_key)
+                    self._log(f"Batch saved: {out_csv}")
+            except Exception as e:
+                self._log(f"Batch error ({method_key}): {e}")
+
+        if last_data is not None:
+            self.data = last_data
+            self.plot_data(self.data)
+
+    def generate_report(self):
+        if self.data is None or self.data_path is None:
+            messagebox.showwarning("No data", "Please import a CSV first.")
+            return
+        out_dir = os.path.join(BASE_DIR, "output")
+        os.makedirs(out_dir, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        report_path = os.path.join(out_dir, f"report_{ts}.md")
+        image_path = os.path.join(out_dir, f"report_{ts}.png")
+
+        try:
+            self.fig.savefig(image_path, dpi=150)
+        except Exception as e:
+            self._log(f"Report screenshot failed: {e}")
+
+        bounds = None
+        try:
+            bounds = self._get_crop_bounds(self._apply_preprocess(np.nan_to_num(self.data)))
+        except Exception:
+            bounds = None
+
+        method_key = self.method_keys[self.method_combo.current()]
+        method_name = PROCESSING_METHODS[method_key]["name"]
+        try:
+            params = self._get_params()
+        except Exception:
+            params = {}
+
+        lines = []
+        lines.append(f"# GPR GUI Report ({ts})")
+        lines.append("")
+        lines.append(f"- Data file: {self.data_path}")
+        lines.append(f"- Method: {method_name}")
+        if params:
+            lines.append(f"- Params: {params}")
+        lines.append(f"- Colormap: {self._get_colormap()}")
+        lines.append(f"- Symmetric stretch: {self.symmetric_var.get()}")
+        lines.append(f"- Normalize: {self.normalize_var.get()}")
+        lines.append(f"- Demean: {self.demean_var.get()}")
+        if bounds:
+            lines.append(
+                f"- Crop: time {bounds['time_start']}~{bounds['time_end']} ; distance {bounds['dist_start']}~{bounds['dist_end']}"
+            )
+        else:
+            lines.append("- Crop: disabled")
+        lines.append("")
+        lines.append(f"- Screenshot: {image_path}")
+        lines.append("")
+        lines.append("## Log")
+        log_text = self.info.get("1.0", tk.END).strip()
+        lines.append("```")
+        lines.append(log_text)
+        lines.append("```")
+
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+
+        self._log(f"Report saved: {report_path}")
 
     def apply_method(self):
         if self.data is None or self.data_path is None:
