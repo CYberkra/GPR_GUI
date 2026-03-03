@@ -1,24 +1,25 @@
-# GPR GUI (Minimal Prototype)
+# GPR GUI (Enhanced Prototype)
 
-This is a minimal Tkinter-based GUI to load CSV, display B-scan, and apply basic processing methods from `PythonModule_core`.
+Tkinter GUI to load CSV, display B-scan, and apply both **original** processing methods from `PythonModule_core` and **researched** methods (SVD background, F-K filter, Hankel SVD, sliding average).
 
 ## Features
 - Import CSV
 - Display B-scan (matplotlib)
-- Fixed method list (order required)
-- Apply selected method (calls `PythonModule_core` functions)
-- Info/notes text box
+- Method list (original + researched)
+- Per-method parameter inputs (window width, time, rank, etc.)
+- Output CSV/PNG saved under `output/`
 
 ## Requirements
 - Python 3.8+
 - numpy
 - pandas
 - matplotlib
+- scipy
 - tkinter (usually included with Python)
 
 Install deps:
 ```bash
-pip install numpy pandas matplotlib
+pip install numpy pandas matplotlib scipy
 ```
 
 ## Run
@@ -27,21 +28,16 @@ From repo root:
 python app.py
 ```
 
-
 ## Sample data
 - Example B-scan CSV: `sample_data/sample_bscan.csv`
 
 How to verify:
 1) Run `python app.py`
 2) Click **Import CSV** and select `sample_data/sample_bscan.csv`
-3) The B-scan should render in the right panel
-
-## Notes
-- Output CSV/PNG are saved under `output/` in this repo.
-- Default parameters are minimal placeholders; adjust inside `app.py` as needed.
-- `read_file_data.py` is included locally so `PythonModule_core` imports succeed.
+3) Select a method and set parameters
+4) Click **Apply Selected Method** to see output
 
 ## Repo layout
-- `app.py` — main GUI
+- `app.py` — main GUI (enhanced)
 - `read_file_data.py` — minimal CSV IO helpers
 - `output/` — generated results
