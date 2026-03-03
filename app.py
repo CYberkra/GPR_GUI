@@ -13,6 +13,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 import numpy as np
+import pandas as pd
 import re
 
 # matplotlib for B-scan
@@ -38,18 +39,13 @@ if BASE_DIR not in sys.path:
 from read_file_data import savecsv, save_image
 
 
+# 匹配真实的带单位表头
 _HEADER_KEYS = [
     "Number of Samples",
-    "Time windows",
+    "Time windows (ns)",   
     "Number of Traces",
-    "Trace interval",
+    "Trace interval (m)", 
 ]
-
-
-def _normalize_header_key(key: str) -> str:
-    return (key
-            .replace("Time windows (ns)", "Time windows")
-            .replace("Trace interval (m)", "Trace interval"))
 
 
 def _parse_header_lines(lines):
@@ -60,7 +56,7 @@ def _parse_header_lines(lines):
         if "=" not in line:
             return None
         left, right = line.split("=", 1)
-        key = _normalize_header_key(left.strip())
+        key = left.strip()
         m = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", right)
         if not m:
             return None
@@ -73,9 +69,9 @@ def _parse_header_lines(lines):
         return None
     return {
         "a_scan_length": int(info["Number of Samples"]),
-        "total_time_ns": float(info["Time windows"]),
+        "total_time_ns": float(info["Time windows (ns)"]),
         "num_traces": int(info["Number of Traces"]),
-        "trace_interval_m": float(info["Trace interval"]),
+        "trace_interval_m": float(info["Trace interval (m)"]),
     }
 
 
@@ -104,13 +100,11 @@ def method_fk_filter(data, angle_low=10, angle_high=65, taper_width=5, **kwargs)
     F = fftshift(fft2(data))
     ny, nx = F.shape
     
-    # 必须将频率轴也 shift 到中心
     ky = fftshift(np.fft.fftfreq(ny))
     kx = fftshift(np.fft.fftfreq(nx))
     
     KY, KX = np.meshgrid(ky, kx, indexing='ij')
     
-    # 使用绝对值角度保证左右倾斜的信号都被同等过滤
     angle = np.degrees(np.arctan2(np.abs(KY), np.abs(KX)))
 
     mask = np.ones_like(F)
@@ -174,7 +168,6 @@ def method_hankel_svd(data, window_length=None, rank=None, **kwargs):
         S_filtered[:rank_val] = S[:rank_val]
         hankel_filtered = (U * S_filtered) @ Vt
         
-        # 反对角线平均 (Diagonal Averaging)
         trace_filtered = np.zeros(ny)
         counts = np.zeros(ny)
         
@@ -327,6 +320,15 @@ class GPRGui(tk.Tk):
         self.param_vars = {}
         self._render_params(self.method_keys[0])
 
+        self.symmetric_var = tk.BooleanVar(value=False)
+        self.symm_check = tk.Checkbutton(
+            left,
+            text="Symmetric gray stretch (vmin/vmax)",
+            variable=self.symmetric_var,
+            command=self._on_symmetric_toggle,
+        )
+        self.symm_check.pack(pady=5)
+
         tk.Label(left, text="Info / Notes").pack(pady=(15, 5))
         self.info = tk.Text(left, height=18, width=35)
         self.info.pack(pady=5)
@@ -349,6 +351,10 @@ class GPRGui(tk.Tk):
         idx = self.method_combo.current()
         key = self.method_keys[idx]
         self._render_params(key)
+
+    def _on_symmetric_toggle(self):
+        if self.data is not None:
+            self.plot_data(self.data)
 
     def _render_params(self, method_key: str):
         for widget in self.param_frame.winfo_children():
@@ -392,17 +398,61 @@ class GPRGui(tk.Tk):
         )
         if not path:
             return
+        
         try:
             header_info = detect_csv_header(path)
+            
+            # 检测并跳过表头
+            skip_lines = 0
+            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                for i in range(10): 
+                    line = f.readline()
+                    if not line: break
+                    if "=" in line or "Samples" in line or "Traces" in line:
+                        skip_lines = i + 1
+
+            # 使用 pandas 读取整个文件
+            df = pd.read_csv(path, header=None, skiprows=skip_lines)
+            raw_data = df.values
+
+            # ================= 核心修复：自动识别并折叠一维顺序数据 =================
             if header_info:
-                data = np.loadtxt(path, delimiter=",", skiprows=4)
+                samples = header_info["a_scan_length"]
+                traces = header_info["num_traces"]
+                
+                # 情况1：如果你读入的是像 A8-NEW-1.csv 这种带有 GPS 信息的 5 列原始数据
+                if raw_data.shape[1] <= 10 and raw_data.shape[0] >= samples * traces:
+                    # 提取第 4 列（索引 3）作为雷达信号
+                    col_idx = 3 if raw_data.shape[1] > 3 else raw_data.shape[1] - 1
+                    signal_1d = raw_data[:, col_idx]
+                    
+                    # 按照 道数×采样点 的顺序重新折叠并转置，恢复成标准的二维雷达图
+                    data = signal_1d[:traces * samples].reshape((traces, samples)).T
+                    
+                # 情况2：处理完毕后已经变成了二维矩阵的情况，防止错误转置
+                elif raw_data.shape[0] == traces and raw_data.shape[1] >= samples:
+                    data = raw_data[:, :samples].T
+                    
+                # 情况3：标准二维矩阵
+                elif raw_data.shape[0] >= samples and raw_data.shape[1] >= traces:
+                    data = raw_data[:samples, :traces]
+                else:
+                    data = raw_data
             else:
-                data = np.loadtxt(path, delimiter=",")
+                data = raw_data
+            # =====================================================================
+                
+            # 处理残留的 NaN
+            if np.isnan(data).any():
+                data = np.nan_to_num(data, nan=np.nanmean(data))
+                
             if data.ndim == 1:
                 data = data.reshape(-1, 1)
+
             self.data = data
             self.data_path = path
             self.header_info = header_info
+            
             self._log(f"Loaded CSV: {path}  shape={data.shape}")
             if header_info:
                 self._log(
@@ -414,7 +464,9 @@ class GPRGui(tk.Tk):
                 )
             else:
                 self._log("No header metadata detected; using index axes.")
+                
             self.plot_data(data)
+            
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load CSV: {e}")
             self._log(f"Failed to load CSV: {e}")
@@ -423,10 +475,11 @@ class GPRGui(tk.Tk):
         self.ax.clear()
         extent = None
         if self.header_info:
-            num_traces = max(1, int(self.header_info["num_traces"]))
-            trace_interval = float(self.header_info["trace_interval_m"])
-            total_time = float(self.header_info["total_time_ns"])
+            num_traces = max(1, int(self.header_info.get("num_traces", data.shape[1])))
+            trace_interval = float(self.header_info.get("trace_interval_m", 1.0))
+            total_time = float(self.header_info.get("total_time_ns", data.shape[0]))
             distance_end = trace_interval * (num_traces - 1)
+            # Y轴向下
             extent = [0.0, distance_end, total_time, 0.0]
             self.ax.set_xlabel("Distance (m)")
             self.ax.set_ylabel("Time (ns)")
@@ -434,7 +487,26 @@ class GPRGui(tk.Tk):
             self.ax.set_xlabel("Distance (trace index)")
             self.ax.set_ylabel("Time (sample index)")
 
-        self.ax.imshow(data, cmap="gray", aspect="auto", extent=extent)
+        valid_data = np.nan_to_num(data)
+
+        if self.symmetric_var.get():
+            # ==== 可选：对称拉伸（vmin/vmax） ====
+            stdcont = np.nanmax(np.abs(valid_data))
+            if stdcont == 0:
+                stdcont = 1e-6
+            vmin = -stdcont
+            vmax = stdcont
+            self.ax.imshow(
+                valid_data,
+                cmap="gray",
+                aspect="auto",
+                extent=extent,
+                vmin=vmin,
+                vmax=vmax,
+            )
+        else:
+            # 默认保持原版视觉（matplotlib 自动拉伸）
+            self.ax.imshow(valid_data, cmap="gray", aspect="auto", extent=extent)
         self.ax.set_title("B-scan")
         self.canvas.draw()
 
@@ -487,31 +559,41 @@ class GPRGui(tk.Tk):
                 end_position = self.data.shape[1]
                 scans_per_meter = 1
 
+                # ================= 核心修复：中间文件传递 =================
+                # 把 GUI 当前纯净的二维数据先写入一个临时文件 temp_in.csv
+                # 让外部的 core 方法去读这个只有雷达信号的二维矩阵，
+                # 防止它们读到原始文件的 GPS 数据产生乱码！
+                temp_in_csv = os.path.join(out_dir, "temp_in.csv")
+                savecsv(self.data, temp_in_csv)
+                # ==========================================================
+
                 if method_key == "compensatingGain":
                     gain_min = float(params.get("gain_min", 1.0))
                     gain_max = float(params.get("gain_max", 6.0))
                     gain_func = np.linspace(gain_min, gain_max, self.data.shape[0]).tolist()
-                    func(self.data_path, out_csv, out_png, length_trace, start_position, end_position, gain_func)
+                    func(temp_in_csv, out_csv, out_png, length_trace, start_position, end_position, gain_func)
                 elif method_key == "dewow":
                     window = int(params.get("window", max(1, length_trace // 4)))
-                    func(self.data_path, out_csv, out_png, length_trace, start_position, scans_per_meter, window)
+                    func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter, window)
                 elif method_key == "set_zero_time":
                     new_zero_time = float(params.get("new_zero_time", 5.0))
-                    func(self.data_path, out_csv, out_png, length_trace, start_position, scans_per_meter, new_zero_time)
+                    func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter, new_zero_time)
                 elif method_key == "agcGain":
                     window = int(params.get("window", max(1, length_trace // 4)))
-                    func(self.data_path, out_csv, out_png, length_trace, start_position, scans_per_meter, window)
+                    func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter, window)
                 elif method_key == "subtracting_average_2D":
-                    func(self.data_path, out_csv, out_png, length_trace, start_position, scans_per_meter)
+                    func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter)
                 elif method_key == "running_average_2D":
-                    func(self.data_path, out_csv, out_png, length_trace, start_position, scans_per_meter)
+                    func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter)
                 else:
                     self._log("Unknown core method; no processing applied.")
                     self.plot_data(self.data)
                     return
 
                 if os.path.exists(out_csv):
-                    newdata = np.loadtxt(out_csv, delimiter=",")
+                    # 读取外部方法输出的 CSV 时，也使用 pandas 进行更好的容错
+                    newdata_df = pd.read_csv(out_csv, header=None)
+                    newdata = newdata_df.values
                     if newdata.ndim == 1:
                         newdata = newdata.reshape(-1, 1)
                     self.data = newdata
@@ -520,6 +602,7 @@ class GPRGui(tk.Tk):
                 else:
                     self._log("Processing finished but output CSV not found.")
             else:
+                # 运行内置的研究方法 (Research methods)
                 result = method["func"](self.data, **params)
                 if isinstance(result, tuple):
                     newdata = result[0]
