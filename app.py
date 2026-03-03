@@ -46,6 +46,12 @@ _HEADER_KEYS = [
 ]
 
 
+def _normalize_header_key(key: str) -> str:
+    return (key
+            .replace("Time windows (ns)", "Time windows")
+            .replace("Trace interval (m)", "Trace interval"))
+
+
 def _parse_header_lines(lines):
     if len(lines) < 4:
         return None
@@ -54,7 +60,7 @@ def _parse_header_lines(lines):
         if "=" not in line:
             return None
         left, right = line.split("=", 1)
-        key = left.strip()
+        key = _normalize_header_key(left.strip())
         m = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", right)
         if not m:
             return None
@@ -94,13 +100,18 @@ def method_svd_background(data, rank=1, **kwargs):
 
 
 def method_fk_filter(data, angle_low=10, angle_high=65, taper_width=5, **kwargs):
-    """F-K cone filter"""
+    """F-K cone filter (Corrected)"""
     F = fftshift(fft2(data))
     ny, nx = F.shape
-    ky = np.fft.fftfreq(ny)
-    kx = np.fft.fftfreq(nx)
+    
+    # 必须将频率轴也 shift 到中心
+    ky = fftshift(np.fft.fftfreq(ny))
+    kx = fftshift(np.fft.fftfreq(nx))
+    
     KY, KX = np.meshgrid(ky, kx, indexing='ij')
-    angle = np.degrees(np.arctan2(KY, KX))
+    
+    # 使用绝对值角度保证左右倾斜的信号都被同等过滤
+    angle = np.degrees(np.arctan2(np.abs(KY), np.abs(KX)))
 
     mask = np.ones_like(F)
     band_mask = (angle >= angle_low) & (angle <= angle_high)
@@ -126,7 +137,7 @@ def method_fk_filter(data, angle_low=10, angle_high=65, taper_width=5, **kwargs)
 
 
 def method_hankel_svd(data, window_length=None, rank=None, **kwargs):
-    """Hankel SVD denoising"""
+    """Hankel SVD denoising (Corrected with Diagonal Averaging)"""
     ny, nx = data.shape
     if window_length is None or window_length <= 0:
         window_length = ny // 4
@@ -139,27 +150,42 @@ def method_hankel_svd(data, window_length=None, rank=None, **kwargs):
         if m <= 0:
             result[:, col] = trace
             continue
+            
         hankel = np.zeros((m, window_length))
         for i in range(window_length):
             hankel[:, i] = trace[i:i+m]
+            
         U, S, Vt = svd(hankel, full_matrices=False)
+        
         if rank is None or rank <= 0:
             diff_spec = np.diff(S)
             threshold = np.mean(np.abs(diff_spec))
-            rank = 1
+            rank_val = 1
             for i in range(len(diff_spec) - 2):
                 if (abs(diff_spec[i]) < threshold and
                     abs(diff_spec[i+1]) < threshold):
-                    rank = i + 1
+                    rank_val = i + 1
                     break
-            rank = max(rank, 1)
+            rank_val = max(rank_val, 1)
+        else:
+            rank_val = max(rank, 1)
+            
         S_filtered = np.zeros_like(S)
-        S_filtered[:rank] = S[:rank]
+        S_filtered[:rank_val] = S[:rank_val]
         hankel_filtered = (U * S_filtered) @ Vt
+        
+        # 反对角线平均 (Diagonal Averaging)
         trace_filtered = np.zeros(ny)
-        trace_filtered[:m] = hankel_filtered[:, 0]
-        trace_filtered[m:] = hankel_filtered[-1, 1:]
+        counts = np.zeros(ny)
+        
+        for i in range(m):
+            for j in range(window_length):
+                trace_filtered[i + j] += hankel_filtered[i, j]
+                counts[i + j] += 1
+                
+        trace_filtered /= counts
         result[:, col] = trace_filtered
+        
     return result, None
 
 
