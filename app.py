@@ -329,6 +329,88 @@ class GPRGui(tk.Tk):
         )
         self.symm_check.pack(pady=5)
 
+        # Display options
+        tk.Label(left, text="Colormap").pack(pady=(10, 2))
+        self.cmap_var = tk.StringVar(value="gray")
+        self.cmap_combo = ttk.Combobox(left, state="readonly", width=28, textvariable=self.cmap_var)
+        self.cmap_combo["values"] = ["gray", "viridis", "plasma", "inferno", "magma", "jet", "seismic"]
+        self.cmap_combo.pack(pady=2)
+        self.cmap_combo.bind("<<ComboboxSelected>>", lambda e: self._refresh_plot())
+
+        self.cmap_invert_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            left,
+            text="Invert colormap",
+            variable=self.cmap_invert_var,
+            command=self._refresh_plot,
+        ).pack(pady=2)
+
+        # Preprocess toggles
+        tk.Label(left, text="Preprocess").pack(pady=(10, 2))
+        self.normalize_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            left,
+            text="Normalize (max abs)",
+            variable=self.normalize_var,
+            command=self._refresh_plot,
+        ).pack(pady=2)
+        self.demean_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            left,
+            text="Demean (per trace)",
+            variable=self.demean_var,
+            command=self._refresh_plot,
+        ).pack(pady=2)
+
+        # Crop window
+        tk.Label(left, text="Crop Window").pack(pady=(10, 2))
+        self.crop_enable_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            left,
+            text="Enable crop",
+            variable=self.crop_enable_var,
+            command=self._refresh_plot,
+        ).pack(pady=2)
+        crop_row1 = tk.Frame(left)
+        crop_row1.pack(fill=tk.X, pady=1)
+        tk.Label(crop_row1, text="Time start", width=10, anchor="w").pack(side=tk.LEFT)
+        self.time_start_var = tk.StringVar(value="")
+        tk.Entry(crop_row1, textvariable=self.time_start_var, width=10).pack(side=tk.LEFT)
+        tk.Label(crop_row1, text="end", width=4).pack(side=tk.LEFT)
+        self.time_end_var = tk.StringVar(value="")
+        tk.Entry(crop_row1, textvariable=self.time_end_var, width=10).pack(side=tk.LEFT)
+
+        crop_row2 = tk.Frame(left)
+        crop_row2.pack(fill=tk.X, pady=1)
+        tk.Label(crop_row2, text="Dist start", width=10, anchor="w").pack(side=tk.LEFT)
+        self.dist_start_var = tk.StringVar(value="")
+        tk.Entry(crop_row2, textvariable=self.dist_start_var, width=10).pack(side=tk.LEFT)
+        tk.Label(crop_row2, text="end", width=4).pack(side=tk.LEFT)
+        self.dist_end_var = tk.StringVar(value="")
+        tk.Entry(crop_row2, textvariable=self.dist_end_var, width=10).pack(side=tk.LEFT)
+
+        tk.Button(left, text="Apply Crop", command=self._refresh_plot, width=22).pack(pady=3)
+        tk.Button(left, text="Reset Crop", command=self._reset_crop, width=22).pack(pady=3)
+
+        # Fast preview options
+        tk.Label(left, text="Fast Preview").pack(pady=(10, 2))
+        self.fast_preview_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            left,
+            text="Enable chunked preview",
+            variable=self.fast_preview_var,
+        ).pack(pady=2)
+        prev_row = tk.Frame(left)
+        prev_row.pack(fill=tk.X, pady=1)
+        tk.Label(prev_row, text="Max samples", width=10, anchor="w").pack(side=tk.LEFT)
+        self.max_samples_var = tk.StringVar(value="512")
+        tk.Entry(prev_row, textvariable=self.max_samples_var, width=10).pack(side=tk.LEFT)
+        prev_row2 = tk.Frame(left)
+        prev_row2.pack(fill=tk.X, pady=1)
+        tk.Label(prev_row2, text="Max traces", width=10, anchor="w").pack(side=tk.LEFT)
+        self.max_traces_var = tk.StringVar(value="200")
+        tk.Entry(prev_row2, textvariable=self.max_traces_var, width=10).pack(side=tk.LEFT)
+
         tk.Label(left, text="Info / Notes").pack(pady=(15, 5))
         self.info = tk.Text(left, height=18, width=35)
         self.info.pack(pady=5)
@@ -355,6 +437,155 @@ class GPRGui(tk.Tk):
     def _on_symmetric_toggle(self):
         if self.data is not None:
             self.plot_data(self.data)
+
+    def _refresh_plot(self):
+        if self.data is not None:
+            self.plot_data(self.data)
+
+    def _reset_crop(self):
+        self.time_start_var.set("")
+        self.time_end_var.set("")
+        self.dist_start_var.set("")
+        self.dist_end_var.set("")
+        self.crop_enable_var.set(False)
+        self._refresh_plot()
+
+    def _get_colormap(self):
+        cmap = (self.cmap_var.get() or "gray").strip()
+        if self.cmap_invert_var.get():
+            if cmap.endswith("_r"):
+                cmap = cmap[:-2]
+            else:
+                cmap = cmap + "_r"
+        return cmap
+
+    def _apply_preprocess(self, data: np.ndarray) -> np.ndarray:
+        out = data
+        if self.demean_var.get():
+            mean = np.mean(out, axis=0, keepdims=True)
+            out = out - mean
+        if self.normalize_var.get():
+            maxv = np.max(np.abs(out))
+            if maxv == 0:
+                maxv = 1e-6
+            out = out / maxv
+        return out
+
+    def _parse_float(self, text: str):
+        try:
+            return float(text)
+        except Exception:
+            return None
+
+    def _get_crop_bounds(self, data: np.ndarray):
+        if not self.crop_enable_var.get():
+            return None
+
+        n_time, n_dist = data.shape
+        time_start = self._parse_float(self.time_start_var.get().strip())
+        time_end = self._parse_float(self.time_end_var.get().strip())
+        dist_start = self._parse_float(self.dist_start_var.get().strip())
+        dist_end = self._parse_float(self.dist_end_var.get().strip())
+
+        if self.header_info:
+            total_time = float(self.header_info.get("total_time_ns", n_time))
+            num_traces = max(1, int(self.header_info.get("num_traces", n_dist)))
+            trace_interval = float(self.header_info.get("trace_interval_m", 1.0))
+            dist_total = trace_interval * (num_traces - 1)
+
+            if time_start is None:
+                time_start = 0.0
+            if time_end is None:
+                time_end = total_time
+            if dist_start is None:
+                dist_start = 0.0
+            if dist_end is None:
+                dist_end = dist_total
+
+            time_start = max(0.0, min(total_time, time_start))
+            time_end = max(0.0, min(total_time, time_end))
+            dist_start = max(0.0, min(dist_total, dist_start))
+            dist_end = max(0.0, min(dist_total, dist_end))
+
+            if time_end < time_start:
+                time_start, time_end = time_end, time_start
+            if dist_end < dist_start:
+                dist_start, dist_end = dist_end, dist_start
+
+            def time_to_idx(t):
+                if total_time <= 0 or n_time <= 1:
+                    return 0
+                return int(round(t / total_time * (n_time - 1)))
+
+            def dist_to_idx(d):
+                if dist_total <= 0 or n_dist <= 1:
+                    return 0
+                return int(round(d / dist_total * (n_dist - 1)))
+
+            t0 = max(0, min(n_time - 1, time_to_idx(time_start)))
+            t1 = max(0, min(n_time - 1, time_to_idx(time_end)))
+            d0 = max(0, min(n_dist - 1, dist_to_idx(dist_start)))
+            d1 = max(0, min(n_dist - 1, dist_to_idx(dist_end)))
+        else:
+            if time_start is None:
+                time_start = 0.0
+            if time_end is None:
+                time_end = float(n_time - 1)
+            if dist_start is None:
+                dist_start = 0.0
+            if dist_end is None:
+                dist_end = float(n_dist - 1)
+
+            time_start = max(0.0, min(n_time - 1, time_start))
+            time_end = max(0.0, min(n_time - 1, time_end))
+            dist_start = max(0.0, min(n_dist - 1, dist_start))
+            dist_end = max(0.0, min(n_dist - 1, dist_end))
+
+            if time_end < time_start:
+                time_start, time_end = time_end, time_start
+            if dist_end < dist_start:
+                dist_start, dist_end = dist_end, dist_start
+
+            t0 = int(round(time_start))
+            t1 = int(round(time_end))
+            d0 = int(round(dist_start))
+            d1 = int(round(dist_end))
+
+        return {
+            "t0": t0,
+            "t1": t1,
+            "d0": d0,
+            "d1": d1,
+            "time_start": time_start,
+            "time_end": time_end,
+            "dist_start": dist_start,
+            "dist_end": dist_end,
+        }
+
+    def _apply_crop(self, data: np.ndarray):
+        bounds = self._get_crop_bounds(data)
+        if not bounds:
+            return data, None
+        t0, t1, d0, d1 = bounds["t0"], bounds["t1"], bounds["d0"], bounds["d1"]
+        cropped = data[t0:t1 + 1, d0:d1 + 1]
+        return cropped, bounds
+
+    def _downsample_data(self, data: np.ndarray) -> np.ndarray:
+        if not self.fast_preview_var.get():
+            return data
+        try:
+            max_samples = int(float(self.max_samples_var.get() or 0))
+            max_traces = int(float(self.max_traces_var.get() or 0))
+        except Exception:
+            return data
+        n_time, n_dist = data.shape
+        if max_samples > 0 and n_time > max_samples:
+            idx = np.linspace(0, n_time - 1, max_samples).astype(int)
+            data = data[idx, :]
+        if max_traces > 0 and n_dist > max_traces:
+            idx = np.linspace(0, n_dist - 1, max_traces).astype(int)
+            data = data[:, idx]
+        return data
 
     def _render_params(self, method_key: str):
         for widget in self.param_frame.winfo_children():
@@ -411,8 +642,26 @@ class GPRGui(tk.Tk):
                     if "=" in line or "Samples" in line or "Traces" in line:
                         skip_lines = i + 1
 
-            # 使用 pandas 读取整个文件
-            df = pd.read_csv(path, header=None, skiprows=skip_lines)
+            # 使用 pandas 读取文件（可选分块/快速预览）
+            if self.fast_preview_var.get():
+                try:
+                    max_samples = int(float(self.max_samples_var.get() or 0))
+                    max_traces = int(float(self.max_traces_var.get() or 0))
+                except Exception:
+                    max_samples, max_traces = 0, 0
+                target_rows = max_samples if max_samples > 0 else 200000
+                if header_info and max_samples > 0 and max_traces > 0:
+                    target_rows = max_samples * max_traces
+                rows = []
+                count = 0
+                for chunk in pd.read_csv(path, header=None, skiprows=skip_lines, chunksize=200000):
+                    rows.append(chunk)
+                    count += len(chunk)
+                    if count >= target_rows:
+                        break
+                df = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+            else:
+                df = pd.read_csv(path, header=None, skiprows=skip_lines)
             raw_data = df.values
 
             # ================= 核心修复：自动识别并折叠一维顺序数据 =================
@@ -441,6 +690,10 @@ class GPRGui(tk.Tk):
             else:
                 data = raw_data
             # =====================================================================
+
+            if self.fast_preview_var.get():
+                data = self._downsample_data(data)
+                self._log("Fast preview: data downsampled.")
                 
             # 处理残留的 NaN
             if np.isnan(data).any():
@@ -488,6 +741,31 @@ class GPRGui(tk.Tk):
             self.ax.set_ylabel("Time (sample index)")
 
         valid_data = np.nan_to_num(data)
+        valid_data = self._apply_preprocess(valid_data)
+        valid_data, bounds = self._apply_crop(valid_data)
+
+        if self.header_info:
+            total_time = float(self.header_info.get("total_time_ns", valid_data.shape[0]))
+            num_traces = max(1, int(self.header_info.get("num_traces", valid_data.shape[1])))
+            trace_interval = float(self.header_info.get("trace_interval_m", 1.0))
+            distance_end = trace_interval * (num_traces - 1)
+            time_start = 0.0
+            time_end = total_time
+            dist_start = 0.0
+            dist_end = distance_end
+            if bounds:
+                time_start = bounds["time_start"]
+                time_end = bounds["time_end"]
+                dist_start = bounds["dist_start"]
+                dist_end = bounds["dist_end"]
+            extent = [dist_start, dist_end, time_end, time_start]
+        else:
+            if bounds:
+                extent = [bounds["dist_start"], bounds["dist_end"], bounds["time_end"], bounds["time_start"]]
+            else:
+                extent = None
+
+        cmap = self._get_colormap()
 
         if self.symmetric_var.get():
             # ==== 可选：对称拉伸（vmin/vmax） ====
@@ -498,7 +776,7 @@ class GPRGui(tk.Tk):
             vmax = stdcont
             self.ax.imshow(
                 valid_data,
-                cmap="gray",
+                cmap=cmap,
                 aspect="auto",
                 extent=extent,
                 vmin=vmin,
@@ -506,7 +784,7 @@ class GPRGui(tk.Tk):
             )
         else:
             # 默认保持原版视觉（matplotlib 自动拉伸）
-            self.ax.imshow(valid_data, cmap="gray", aspect="auto", extent=extent)
+            self.ax.imshow(valid_data, cmap=cmap, aspect="auto", extent=extent)
         self.ax.set_title("B-scan")
         self.canvas.draw()
 
@@ -515,7 +793,10 @@ class GPRGui(tk.Tk):
         os.makedirs(out_dir, exist_ok=True)
         out_csv = os.path.join(out_dir, f"{method_key}_out.csv")
         out_png = os.path.join(out_dir, f"{method_key}_out.png")
-        savecsv(data, out_csv)
+
+        save_data = self._apply_preprocess(np.nan_to_num(data))
+        save_data, bounds = self._apply_crop(save_data)
+        savecsv(save_data, out_csv)
 
         time_range = None
         distance_range = None
@@ -524,10 +805,21 @@ class GPRGui(tk.Tk):
             num_traces = max(1, int(self.header_info["num_traces"]))
             trace_interval = float(self.header_info["trace_interval_m"])
             distance_end = trace_interval * (num_traces - 1)
-            time_range = (0.0, total_time)
-            distance_range = (0.0, distance_end)
+            if bounds:
+                time_range = (bounds["time_start"], bounds["time_end"])
+                distance_range = (bounds["dist_start"], bounds["dist_end"])
+            else:
+                time_range = (0.0, total_time)
+                distance_range = (0.0, distance_end)
 
-        save_image(data, out_png, title=method_key, time_range=time_range, distance_range=distance_range)
+        save_image(
+            save_data,
+            out_png,
+            title=method_key,
+            time_range=time_range,
+            distance_range=distance_range,
+            cmap=self._get_colormap(),
+        )
         return out_csv, out_png
 
     def apply_method(self):
@@ -597,6 +889,7 @@ class GPRGui(tk.Tk):
                     if newdata.ndim == 1:
                         newdata = newdata.reshape(-1, 1)
                     self.data = newdata
+                    out_csv, out_png = self._save_outputs(newdata, method_key)
                     self.plot_data(newdata)
                     self._log(f"Processed data saved: {out_csv}")
                 else:

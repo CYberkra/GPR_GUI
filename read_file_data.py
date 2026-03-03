@@ -112,13 +112,13 @@ def savecsv(data, path: str):
 
 
 def save_image(data, outimagename: str, title: str = '',
-               time_range=None, distance_range=None):
+               time_range=None, distance_range=None, cmap='gray'):
     arr = np.asarray(data)
     plt.figure(figsize=(8, 4))
     extent = None
     if time_range is not None and distance_range is not None:
         extent = [distance_range[0], distance_range[1], time_range[1], time_range[0]]
-    plt.imshow(arr, cmap='gray', aspect='auto', extent=extent)
+    plt.imshow(arr, cmap=cmap, aspect='auto', extent=extent)
     plt.title(title)
     plt.xlabel('Distance (m)')
     plt.ylabel('Time (ns)')
@@ -127,12 +127,12 @@ def save_image(data, outimagename: str, title: str = '',
     plt.close()
 
 
-def show_image(data, time_range=None, distance_range=None):
+def show_image(data, time_range=None, distance_range=None, cmap='gray'):
     arr = np.asarray(data)
     extent = None
     if time_range is not None and distance_range is not None:
         extent = [distance_range[0], distance_range[1], time_range[1], time_range[0]]
-    plt.imshow(arr, cmap='gray', aspect='auto', extent=extent)
+    plt.imshow(arr, cmap=cmap, aspect='auto', extent=extent)
     plt.xlabel('Distance (m)')
     plt.ylabel('Time (ns)')
     plt.show()
