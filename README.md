@@ -41,3 +41,14 @@ How to verify:
 - `app.py` — main GUI (enhanced)
 - `read_file_data.py` — minimal CSV IO helpers
 - `output/` — generated results
+
+## PyQt6 UI (isolated merge)
+- Entry: `app_qt.py`
+- Dependencies: see `dependencies_qt.txt`
+- Optional theme: qt-material / qdarkstyle
+- Preview helper: `tools/preview_app.py`
+
+Run (example):
+```bash
+python app_qt.py
+```
