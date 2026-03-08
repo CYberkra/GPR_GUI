@@ -22,11 +22,12 @@ import matplotlib
 matplotlib.use("QtAgg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+matplotlib.rcParams['font.sans-serif'] = ['Noto Sans CJK SC', 'Microsoft YaHei', 'SimHei', 'Arial Unicode MS', 'DejaVu Sans']
+matplotlib.rcParams['axes.unicode_minus'] = False
 
 from scipy.linalg import svd
 from scipy.ndimage import uniform_filter1d
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
-from scipy.interpolate import interp1d
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QIcon
@@ -119,7 +120,7 @@ def detect_csv_header(path: str):
     try:
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
             lines = [f.readline().strip() for _ in range(4)]
-    except OSError:
+    except OS错误:
         return None
     return _parse_header_lines(lines)
 
@@ -149,7 +150,7 @@ def _detect_skiprows(path: str, max_lines: int = 10) -> int:
                 if _is_numeric_row(line.strip()):
                     break
                 skip += 1
-    except OSError:
+    except OS错误:
         return 0
     return skip
 
@@ -256,49 +257,6 @@ def method_hankel_svd(data, window_length=None, rank=None, **kwargs):
 def method_sliding_average(data, window_size=10, axis=1, **kwargs):
     background = uniform_filter1d(data, size=window_size, axis=axis, mode='nearest')
     return data - background, background
-
-
-def method_kirchhoff_migration(data, dx=0.05, dt=0.1, v=0.10, aperture=20, **kwargs):
-    """Kirchhoff 积分迁移 (向量化加速版)"""
-    ny, nx = data.shape
-    migrated = np.zeros_like(data)
-
-    t = np.arange(ny) * dt
-    if ny > 0:
-        t[0] = 1e-6
-    t0_sq = t ** 2
-
-    for ix in range(nx):
-        start_tr = max(0, ix - int(aperture))
-        end_tr = min(nx, ix + int(aperture) + 1)
-
-        dist = (np.arange(start_tr, end_tr) - ix) * dx
-        dx_term = 4 * (dist ** 2) / (v ** 2)
-
-        t_travel = np.sqrt(t0_sq[:, None] + dx_term[None, :])
-        t_idx = (t_travel / dt).astype(int)
-        valid_mask = t_idx < ny
-
-        for i_d, tr in enumerate(range(start_tr, end_tr)):
-            valid_t = valid_mask[:, i_d]
-            migrated[valid_t, ix] += data[t_idx[valid_t, i_d], tr]
-
-    return migrated, None
-
-
-def method_time_to_depth(data, dt=0.1, v=0.10, dz=0.02, **kwargs):
-    """深度转换与标定"""
-    ny, nx = data.shape
-    t = np.arange(ny) * dt
-    z_old = t * v / 2.0
-
-    z_max = z_old[-1] if ny > 0 else 0.0
-    num_z = int(z_max / dz) + 1 if dz > 0 else ny
-    z_new = np.linspace(0, z_max, max(num_z, 1))
-
-    f = interp1d(z_old, data, axis=0, bounds_error=False, fill_value=0.0)
-    depth_data = f(z_new)
-    return depth_data, {"is_depth": True, "z_max": z_max}
 
 
 # ------------------ Method registry ------------------
@@ -408,28 +366,6 @@ PROCESSING_METHODS = {
             {"name": "sigma", "label": "噪声方差", "type": "float", "default": 0.1, "min": 0.0, "max": 10.0},
         ],
     },
-
-    "kirchhoff_migration": {
-        "name": "Kirchhoff 迁移 (目标聚焦)",
-        "type": "local",
-        "func": method_kirchhoff_migration,
-        "params": [
-            {"name": "dx", "label": "道间距 (m)", "type": "float", "default": 0.05, "min": 0.001, "max": 10.0},
-            {"name": "dt", "label": "时间步长 (ns)", "type": "float", "default": 0.1, "min": 0.01, "max": 10.0},
-            {"name": "v", "label": "波速 (m/ns)", "type": "float", "default": 0.10, "min": 0.01, "max": 0.3},
-            {"name": "aperture", "label": "孔径 (单侧道数)", "type": "int", "default": 20, "min": 1, "max": 200},
-        ],
-    },
-    "time_to_depth": {
-        "name": "深度转换与标定",
-        "type": "local",
-        "func": method_time_to_depth,
-        "params": [
-            {"name": "dt", "label": "时间步长 (ns)", "type": "float", "default": 0.1, "min": 0.01, "max": 10.0},
-            {"name": "v", "label": "波速 (m/ns)", "type": "float", "default": 0.10, "min": 0.01, "max": 0.3},
-            {"name": "dz", "label": "深度网格步长 (m)", "type": "float", "default": 0.02, "min": 0.001, "max": 1.0},
-        ],
-    },
 "sec_gain": {
         "name": "SEC增益（深度补偿）",
         "type": "local",
@@ -453,31 +389,31 @@ PROCESSING_METHODS = {
 
 
 
+PREFERRED_METHOD_ORDER = [
+    "set_zero_time", "dewow", "subtracting_average_2D", "fk_filter", "sec_gain", "hankel_svd",
+    "agcGain", "svd_bg", "rpca_placeholder", "wnnm_placeholder",
+    "sliding_avg", "running_average_2D", "compensatingGain",
+]
+
 
 METHOD_DISPLAY_NAMES = {
+    # 标准流程（推荐）
     "set_zero_time": "1. 时间零点校正（time-zero）",
     "dewow": "2. 去直流/去漂移（dewow）",
     "subtracting_average_2D": "3. 背景去除（mean）",
     "fk_filter": "4. 频带滤波（F-K）",
     "sec_gain": "5. 增益（SEC，推荐）",
     "hankel_svd": "6. 去噪（Hankel-SVD）",
-    "kirchhoff_migration": "7. 迁移（Kirchhoff）",
-    "time_to_depth": "8. 深度转换与标定",
-    "agcGain": "9. 增益（AGC，备选）",
-    "svd_bg": "10. 背景去除（SVD，备选）",
-    "rpca_placeholder": "11. 背景去除（RPCA，占位）",
-    "wnnm_placeholder": "12. 背景去除（WNNM，占位）",
-    "sliding_avg": "13. 滑动平均背景去除（与步骤3重复）",
-    "running_average_2D": "14. 运行平均抑噪（与步骤6重复）",
-    "compensatingGain": "15. 增益补偿（与步骤5/9重复）",
+    # 备选/扩展
+    "agcGain": "7. 增益（AGC，备选）",
+    "svd_bg": "8. 背景去除（SVD，备选）",
+    "rpca_placeholder": "9. 背景去除（RPCA，占位）",
+    "wnnm_placeholder": "10. 背景去除（WNNM，占位）",
+    # 重复性方法（置底）
+    "sliding_avg": "11. 滑动平均背景去除（与步骤3重复）",
+    "running_average_2D": "12. 运行平均抑噪（与步骤6重复）",
+    "compensatingGain": "13. 增益补偿（与步骤5/7重复）",
 }
-
-PREFERRED_METHOD_ORDER = [
-    "set_zero_time", "dewow", "subtracting_average_2D", "fk_filter", "sec_gain", "hankel_svd",
-    "kirchhoff_migration", "time_to_depth",
-    "agcGain", "svd_bg", "rpca_placeholder", "wnnm_placeholder",
-    "sliding_avg", "running_average_2D", "compensatingGain",
-]
 
 METHOD_TAGS = {
     "subtracting_average_2D": "推荐",
@@ -502,6 +438,7 @@ class GPRGuiQt(QMainWindow):
         self.header_info = None
         self.original_data = None
         self.history = []
+        self.history_labels = []
         self.cbar = None
 
         central = QWidget()
@@ -515,7 +452,7 @@ class GPRGuiQt(QMainWindow):
 
         # Left panel (scrollable)
         left_panel = QWidget()
-        left_panel.setMinimumWidth(320)
+        left_panel.setMinimumWidth(260)
         left_layout = QVBoxLayout(left_panel)
         left_layout.setSpacing(10)
 
@@ -527,12 +464,12 @@ class GPRGuiQt(QMainWindow):
         # Right panel (plot)
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(6, 6, 6, 6)
+        right_layout.setContentsMargins(2, 2, 2, 2)
         splitter.addWidget(right_panel)
 
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([360, 900])
+        splitter.setSizes([260, 1020])
 
         # ----- Actions -----
         action_box = QGroupBox("🧰 操作")
@@ -578,7 +515,9 @@ class GPRGuiQt(QMainWindow):
         for key in self.method_keys:
             self.batch_list.addItem(QListWidgetItem(METHOD_DISPLAY_NAMES.get(key, PROCESSING_METHODS[key]['name'])))
         batch_layout.addWidget(self.batch_list)
-        self.btn_batch = QPushButton("运行批处理对比")
+        self.btn_batch = QPushButton("批处理功能维护中")
+        self.btn_batch.setEnabled(False)
+        self.btn_batch.setToolTip("已临时关闭：该功能存在稳定性问题，待修复后恢复")
         batch_layout.addWidget(self.btn_batch)
         self.btn_report = QPushButton("生成报告")
         batch_layout.addWidget(self.btn_report)
@@ -600,9 +539,17 @@ class GPRGuiQt(QMainWindow):
         self.chatgpt_style_var.setChecked(False)
         display_body_layout.addWidget(self.chatgpt_style_var)
 
-        self.compare_var = QCheckBox("双视图对比（原始/处理）")
-        self.compare_var.setChecked(True)
+        self.compare_var = QCheckBox("双视图对比")
+        self.compare_var.setChecked(False)
         display_body_layout.addWidget(self.compare_var)
+        cmp_row = QWidget()
+        cmp_l = QHBoxLayout(cmp_row)
+        cmp_l.setContentsMargins(0, 0, 0, 0)
+        cmp_l.addWidget(QLabel("对比来源"))
+        self.compare_source_combo = QComboBox()
+        self.compare_source_combo.addItems(["原始数据", "上一步"])
+        cmp_l.addWidget(self.compare_source_combo)
+        display_body_layout.addWidget(cmp_row)
 
         cmap_row = QWidget()
         cmap_l = QHBoxLayout(cmap_row)
@@ -744,13 +691,13 @@ class GPRGuiQt(QMainWindow):
         status_layout.addStretch(1)
         right_layout.addWidget(status_bar)
 
-        self.fig = Figure(figsize=(7, 5), dpi=100)
+        self.fig = Figure(figsize=(9.5, 6.5), dpi=100)
         self.ax = self.fig.add_subplot(111)
         self.ax.set_title("B-扫")
         self.ax.set_xlabel("距离（道索引）")
         self.ax.set_ylabel("时间（采样索引）")
         self.canvas = FigureCanvas(self.fig)
-        right_layout.addWidget(self.canvas)
+        right_layout.addWidget(self.canvas, 1)
 
         # ---- Signals ----
         self.btn_import.clicked.connect(self.load_csv)
@@ -758,13 +705,13 @@ class GPRGuiQt(QMainWindow):
         self.btn_quick.clicked.connect(self.run_default_pipeline)
         self.btn_undo.clicked.connect(self.undo_last)
         self.btn_reset.clicked.connect(self.reset_original)
-        self.btn_batch.clicked.connect(self.run_batch)
         self.btn_report.clicked.connect(self.generate_report)
         self.btn_apply_crop.clicked.connect(self._refresh_plot)
         self.btn_reset_crop.clicked.connect(self._reset_crop)
 
         self.method_combo.currentIndexChanged.connect(self._on_method_change)
         self.cmap_combo.currentIndexChanged.connect(self._refresh_plot)
+        self.compare_source_combo.currentIndexChanged.connect(self._refresh_plot)
 
         for cb in [
             self.symmetric_var, self.chatgpt_style_var, self.compare_var, self.cmap_invert_var, self.show_cbar_var, self.show_grid_var,
@@ -869,12 +816,14 @@ class GPRGuiQt(QMainWindow):
         return np.clip(x, -v, v), v
 
     # --------- History ---------
-    def _push_history(self):
+    def _push_history(self, label: str = "上一步"):
         if self.data is None:
             return
         self.history.append(self.data.copy())
+        self.history_labels.append(label)
         if len(self.history) > 10:
             self.history.pop(0)
+            self.history_labels.pop(0)
 
     def undo_last(self):
         if not self.history:
@@ -888,7 +837,7 @@ class GPRGuiQt(QMainWindow):
         if self.original_data is None:
             QMessageBox.information(self, "重置", "未加载原始数据。")
             return
-        self._push_history()
+        self._push_history("重置前")
         self.data = self.original_data.copy()
         self.plot_data(self.data)
         self._log("重置: restored original data.")
@@ -1100,15 +1049,15 @@ class GPRGuiQt(QMainWindow):
 
     
     def _move_flow_item(self, direction: int):
-        row = self.batch_list.currentRow()
+        row = self.flow_list.currentRow()
         if row < 0:
             return
         new_row = row + direction
-        if new_row < 0 or new_row >= self.batch_list.count():
+        if new_row < 0 or new_row >= self.flow_list.count():
             return
-        item = self.batch_list.takeItem(row)
-        self.batch_list.insertItem(new_row, item)
-        self.batch_list.setCurrentRow(new_row)
+        item = self.flow_list.takeItem(row)
+        self.flow_list.insertItem(new_row, item)
+        self.flow_list.setCurrentRow(new_row)
 
     def _get_params(self):
         params = {}
@@ -1257,14 +1206,29 @@ class GPRGuiQt(QMainWindow):
                 pass
             self.cbar = None
 
-        if self.compare_var.isChecked() and self.original_data is not None:
-            ax_left = self.fig.add_subplot(1, 2, 1)
-            ax_right = self.fig.add_subplot(1, 2, 2)
-            axes = [ax_left, ax_right]
-            data_pairs = [
-                (self._downsample_for_display(np.nan_to_num(self.original_data)), "原始"),
-                (display_data, "处理后"),
-            ]
+        if self.compare_var.isChecked():
+            source = self.compare_source_combo.currentText()
+            ref = None
+            ref_title = "原始"
+            if source == "上一步" and self.history:
+                ref = self.history[-1]
+                ref_title = "上一步"
+            elif self.original_data is not None:
+                ref = self.original_data
+                ref_title = "原始"
+
+            if ref is not None:
+                ax_top = self.fig.add_subplot(2, 1, 1)
+                ax_bottom = self.fig.add_subplot(2, 1, 2)
+                axes = [ax_top, ax_bottom]
+                data_pairs = [
+                    (self._downsample_for_display(np.nan_to_num(ref)), ref_title),
+                    (display_data, "当前"),
+                ]
+            else:
+                ax_left = self.fig.add_subplot(1, 1, 1)
+                axes = [ax_left]
+                data_pairs = [(display_data, "B-扫")]
         else:
             ax_left = self.fig.add_subplot(1, 1, 1)
             axes = [ax_left]
@@ -1327,6 +1291,7 @@ class GPRGuiQt(QMainWindow):
 
         if self.show_cbar_var.isChecked() and not self.chatgpt_style_var.isChecked():
             self.cbar = self.fig.colorbar(im, ax=axes, fraction=0.046, pad=0.04)
+        self.fig.tight_layout(pad=0.6)
         self.canvas.draw()
 
     # --------- Save outputs ---------
@@ -1554,7 +1519,7 @@ class GPRGuiQt(QMainWindow):
         method_key = self.method_keys[idx]
         method = PROCESSING_METHODS[method_key]
         self._log(f"Applying: {method['name']}")
-        self._push_history()
+        self._push_history(f"应用前:{method['name']}")
 
         try:
             params = self._get_params()
