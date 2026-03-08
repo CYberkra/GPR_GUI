@@ -451,7 +451,7 @@ class GPRGuiQt(QMainWindow):
 
         # Left panel (scrollable)
         left_panel = QWidget()
-        left_panel.setMinimumWidth(300)
+        left_panel.setMinimumWidth(260)
         left_layout = QVBoxLayout(left_panel)
         left_layout.setSpacing(10)
 
@@ -468,7 +468,7 @@ class GPRGuiQt(QMainWindow):
 
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([300, 980])
+        splitter.setSizes([260, 1020])
 
         # ----- Actions -----
         action_box = QGroupBox("🧰 操作")
@@ -682,13 +682,13 @@ class GPRGuiQt(QMainWindow):
         status_layout.addStretch(1)
         right_layout.addWidget(status_bar)
 
-        self.fig = Figure(figsize=(7, 5), dpi=100)
+        self.fig = Figure(figsize=(9.5, 6.5), dpi=100)
         self.ax = self.fig.add_subplot(111)
         self.ax.set_title("B-扫")
         self.ax.set_xlabel("距离（道索引）")
         self.ax.set_ylabel("时间（采样索引）")
         self.canvas = FigureCanvas(self.fig)
-        right_layout.addWidget(self.canvas)
+        right_layout.addWidget(self.canvas, 1)
 
         # ---- Signals ----
         self.btn_import.clicked.connect(self.load_csv)
@@ -1195,9 +1195,10 @@ class GPRGuiQt(QMainWindow):
             self.cbar = None
 
         if self.compare_var.isChecked() and self.original_data is not None:
-            ax_left = self.fig.add_subplot(1, 2, 1)
-            ax_right = self.fig.add_subplot(1, 2, 2)
-            axes = [ax_left, ax_right]
+            # Vertical compare to avoid squashed images in narrow right panel
+            ax_top = self.fig.add_subplot(2, 1, 1)
+            ax_bottom = self.fig.add_subplot(2, 1, 2)
+            axes = [ax_top, ax_bottom]
             data_pairs = [
                 (self._downsample_for_display(np.nan_to_num(self.original_data)), "原始"),
                 (display_data, "处理后"),
