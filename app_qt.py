@@ -438,6 +438,7 @@ class GPRGuiQt(QMainWindow):
         self.header_info = None
         self.original_data = None
         self.history = []
+        self.history_labels = []
         self.cbar = None
 
         central = QWidget()
@@ -538,9 +539,17 @@ class GPRGuiQt(QMainWindow):
         self.chatgpt_style_var.setChecked(False)
         display_body_layout.addWidget(self.chatgpt_style_var)
 
-        self.compare_var = QCheckBox("双视图对比（原始/处理）")
-        self.compare_var.setChecked(True)
+        self.compare_var = QCheckBox("双视图对比")
+        self.compare_var.setChecked(False)
         display_body_layout.addWidget(self.compare_var)
+        cmp_row = QWidget()
+        cmp_l = QHBoxLayout(cmp_row)
+        cmp_l.setContentsMargins(0, 0, 0, 0)
+        cmp_l.addWidget(QLabel("对比来源"))
+        self.compare_source_combo = QComboBox()
+        self.compare_source_combo.addItems(["原始数据", "上一步"])
+        cmp_l.addWidget(self.compare_source_combo)
+        display_body_layout.addWidget(cmp_row)
 
         cmap_row = QWidget()
         cmap_l = QHBoxLayout(cmap_row)
@@ -702,6 +711,7 @@ class GPRGuiQt(QMainWindow):
 
         self.method_combo.currentIndexChanged.connect(self._on_method_change)
         self.cmap_combo.currentIndexChanged.connect(self._refresh_plot)
+        self.compare_source_combo.currentIndexChanged.connect(self._refresh_plot)
 
         for cb in [
             self.symmetric_var, self.chatgpt_style_var, self.compare_var, self.cmap_invert_var, self.show_cbar_var, self.show_grid_var,
@@ -806,12 +816,14 @@ class GPRGuiQt(QMainWindow):
         return np.clip(x, -v, v), v
 
     # --------- History ---------
-    def _push_history(self):
+    def _push_history(self, label: str = "上一步"):
         if self.data is None:
             return
         self.history.append(self.data.copy())
+        self.history_labels.append(label)
         if len(self.history) > 10:
             self.history.pop(0)
+            self.history_labels.pop(0)
 
     def undo_last(self):
         if not self.history:
@@ -825,7 +837,7 @@ class GPRGuiQt(QMainWindow):
         if self.original_data is None:
             QMessageBox.information(self, "重置", "未加载原始数据。")
             return
-        self._push_history()
+        self._push_history("重置前")
         self.data = self.original_data.copy()
         self.plot_data(self.data)
         self._log("重置: restored original data.")
@@ -1194,15 +1206,29 @@ class GPRGuiQt(QMainWindow):
                 pass
             self.cbar = None
 
-        if self.compare_var.isChecked() and self.original_data is not None:
-            # Vertical compare to avoid squashed images in narrow right panel
-            ax_top = self.fig.add_subplot(2, 1, 1)
-            ax_bottom = self.fig.add_subplot(2, 1, 2)
-            axes = [ax_top, ax_bottom]
-            data_pairs = [
-                (self._downsample_for_display(np.nan_to_num(self.original_data)), "原始"),
-                (display_data, "处理后"),
-            ]
+        if self.compare_var.isChecked():
+            source = self.compare_source_combo.currentText()
+            ref = None
+            ref_title = "原始"
+            if source == "上一步" and self.history:
+                ref = self.history[-1]
+                ref_title = "上一步"
+            elif self.original_data is not None:
+                ref = self.original_data
+                ref_title = "原始"
+
+            if ref is not None:
+                ax_top = self.fig.add_subplot(2, 1, 1)
+                ax_bottom = self.fig.add_subplot(2, 1, 2)
+                axes = [ax_top, ax_bottom]
+                data_pairs = [
+                    (self._downsample_for_display(np.nan_to_num(ref)), ref_title),
+                    (display_data, "当前"),
+                ]
+            else:
+                ax_left = self.fig.add_subplot(1, 1, 1)
+                axes = [ax_left]
+                data_pairs = [(display_data, "B-扫")]
         else:
             ax_left = self.fig.add_subplot(1, 1, 1)
             axes = [ax_left]
@@ -1493,7 +1519,7 @@ class GPRGuiQt(QMainWindow):
         method_key = self.method_keys[idx]
         method = PROCESSING_METHODS[method_key]
         self._log(f"Applying: {method['name']}")
-        self._push_history()
+        self._push_history(f"应用前:{method['name']}")
 
         try:
             params = self._get_params()
