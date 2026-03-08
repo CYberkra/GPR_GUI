@@ -391,29 +391,9 @@ PROCESSING_METHODS = {
 
 PREFERRED_METHOD_ORDER = [
     "set_zero_time", "dewow", "subtracting_average_2D", "fk_filter", "sec_gain", "hankel_svd",
-    "agcGain", "svd_bg", "rpca_placeholder", "wnnm_placeholder",
-    "sliding_avg", "running_average_2D", "compensatingGain",
+    "agcGain", "svd_bg", "sliding_avg", "running_average_2D", "compensatingGain",
+    "rpca_placeholder", "wnnm_placeholder",
 ]
-
-
-METHOD_DISPLAY_NAMES = {
-    # 标准流程（推荐）
-    "set_zero_time": "1. 时间零点校正（time-zero）",
-    "dewow": "2. 去直流/去漂移（dewow）",
-    "subtracting_average_2D": "3. 背景去除（mean）",
-    "fk_filter": "4. 频带滤波（F-K）",
-    "sec_gain": "5. 增益（SEC，推荐）",
-    "hankel_svd": "6. 去噪（Hankel-SVD）",
-    # 备选/扩展
-    "agcGain": "7. 增益（AGC，备选）",
-    "svd_bg": "8. 背景去除（SVD，备选）",
-    "rpca_placeholder": "9. 背景去除（RPCA，占位）",
-    "wnnm_placeholder": "10. 背景去除（WNNM，占位）",
-    # 重复性方法（置底）
-    "sliding_avg": "11. 滑动平均背景去除（与步骤3重复）",
-    "running_average_2D": "12. 运行平均抑噪（与步骤6重复）",
-    "compensatingGain": "13. 增益补偿（与步骤5/7重复）",
-}
 
 METHOD_TAGS = {
     "subtracting_average_2D": "推荐",
@@ -451,7 +431,7 @@ class GPRGuiQt(QMainWindow):
 
         # Left panel (scrollable)
         left_panel = QWidget()
-        left_panel.setMinimumWidth(300)
+        left_panel.setMinimumWidth(320)
         left_layout = QVBoxLayout(left_panel)
         left_layout.setSpacing(10)
 
@@ -463,12 +443,12 @@ class GPRGuiQt(QMainWindow):
         # Right panel (plot)
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(2, 2, 2, 2)
+        right_layout.setContentsMargins(6, 6, 6, 6)
         splitter.addWidget(right_panel)
 
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([300, 980])
+        splitter.setSizes([360, 900])
 
         # ----- Actions -----
         action_box = QGroupBox("🧰 操作")
@@ -498,7 +478,7 @@ class GPRGuiQt(QMainWindow):
         ordered = [k for k in PREFERRED_METHOD_ORDER if k in PROCESSING_METHODS]
         tail = [k for k in PROCESSING_METHODS.keys() if k not in ordered]
         self.method_keys = ordered + tail
-        self.method_combo.addItems([METHOD_DISPLAY_NAMES.get(k, PROCESSING_METHODS[k]['name']) for k in self.method_keys])
+        self.method_combo.addItems([f"{PROCESSING_METHODS[k]['name']} [{METHOD_TAGS.get(k,'')} ]".replace('  ', ' ').strip() for k in self.method_keys])
         method_layout.addWidget(self.method_combo)
         self.param_container = QWidget()
         self.param_layout = QFormLayout(self.param_container)
@@ -512,7 +492,7 @@ class GPRGuiQt(QMainWindow):
         self.batch_list = QListWidget()
         self.batch_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
         for key in self.method_keys:
-            self.batch_list.addItem(QListWidgetItem(METHOD_DISPLAY_NAMES.get(key, PROCESSING_METHODS[key]['name'])))
+            self.batch_list.addItem(QListWidgetItem(f"{PROCESSING_METHODS[key]['name']} [{METHOD_TAGS.get(key,'')} ]".replace('  ', ' ').strip()))
         batch_layout.addWidget(self.batch_list)
         self.btn_batch = QPushButton("批处理功能维护中")
         self.btn_batch.setEnabled(False)
@@ -1264,7 +1244,6 @@ class GPRGuiQt(QMainWindow):
 
         if self.show_cbar_var.isChecked() and not self.chatgpt_style_var.isChecked():
             self.cbar = self.fig.colorbar(im, ax=axes, fraction=0.046, pad=0.04)
-        self.fig.tight_layout(pad=0.6)
         self.canvas.draw()
 
     # --------- Save outputs ---------
