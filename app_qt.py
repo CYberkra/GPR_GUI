@@ -101,7 +101,7 @@ def _parse_header_lines(lines):
             return None
         try:
             val = float(m.group(0))
-        except Value错误:
+        except ValueError:
             return None
         info[key] = val
     if not all(k in info for k in _HEADER_KEYS):
@@ -132,7 +132,7 @@ def _is_numeric_row(line: str) -> bool:
         try:
             float(p)
             has_num = True
-        except Value错误:
+        except ValueError:
             return False
     return has_num
 
@@ -258,6 +258,15 @@ def method_sliding_average(data, window_size=10, axis=1, **kwargs):
 
 
 # ------------------ Method registry ------------------
+
+
+def method_sec_gain(data, gain_min=1.0, gain_max=6.0, power=1.0, **kwargs):
+    # Simple SEC gain: apply depth-dependent gain curve
+    arr = data.astype(float)
+    n = arr.shape[0]
+    t = (np.linspace(0, 1, n) ** max(power, 1e-6))
+    gain = gain_min + (gain_max - gain_min) * t
+    return arr * gain[:, None], gain
 PROCESSING_METHODS = {
     "compensatingGain": {
         "name": "0 compensatingGain (manual gain compensation)",
@@ -275,7 +284,7 @@ PROCESSING_METHODS = {
         "module": "dewow",
         "func": "dewow",
         "params": [
-            {"name": "window", "label": "Window (samples)", "type": "int", "default": 31, "min": 1, "max": 1000},
+            {"name": "window", "label": "Window (samples)", "type": "int", "default": 41, "min": 1, "max": 1000},
         ],
     },
     "set_zero_time": {
@@ -323,9 +332,9 @@ PROCESSING_METHODS = {
         "type": "local",
         "func": method_fk_filter,
         "params": [
-            {"name": "angle_low", "label": "Stopband start angle (°)", "type": "int", "default": 10, "min": 0, "max": 90},
-            {"name": "angle_high", "label": "Stopband end angle (°)", "type": "int", "default": 65, "min": 0, "max": 90},
-            {"name": "taper_width", "label": "Taper width (°)", "type": "int", "default": 5, "min": 0, "max": 20},
+            {"name": "angle_low", "label": "Stopband start angle (°)", "type": "int", "default": 12, "min": 0, "max": 90},
+            {"name": "angle_high", "label": "Stopband end angle (°)", "type": "int", "default": 55, "min": 0, "max": 90},
+            {"name": "taper_width", "label": "Taper width (°)", "type": "int", "default": 4, "min": 0, "max": 20},
         ],
     },
     "hankel_svd": {
@@ -333,11 +342,39 @@ PROCESSING_METHODS = {
         "type": "local",
         "func": method_hankel_svd,
         "params": [
-            {"name": "window_length", "label": "Window length (0=auto)", "type": "int", "default": 0, "min": 0, "max": 2000},
-            {"name": "rank", "label": "Rank kept (0=auto)", "type": "int", "default": 0, "min": 0, "max": 100},
+            {"name": "window_length", "label": "Window length (0=auto)", "type": "int", "default": 80, "min": 0, "max": 2000},
+            {"name": "rank", "label": "Rank kept (0=auto)", "type": "int", "default": 2, "min": 0, "max": 100},
         ],
     },
-    "sliding_avg": {
+    
+    
+    "rpca_placeholder": {
+        "name": "RPCA背景抑制（占位）",
+        "type": "local",
+        "func": lambda d, **k: d,
+        "params": [
+            {"name": "lambda", "label": "稀疏权重", "type": "float", "default": 0.5, "min": 0.01, "max": 1.0},
+        ],
+    },
+    "wnnm_placeholder": {
+        "name": "WNNM背景抑制（占位）",
+        "type": "local",
+        "func": lambda d, **k: d,
+        "params": [
+            {"name": "sigma", "label": "噪声方差", "type": "float", "default": 0.1, "min": 0.0, "max": 10.0},
+        ],
+    },
+"sec_gain": {
+        "name": "SEC增益（深度补偿）",
+        "type": "local",
+        "func": method_sec_gain,
+        "params": [
+            {"name": "gain_min", "label": "增益下限", "type": "float", "default": 1.0, "min": 0.1, "max": 10.0},
+            {"name": "gain_max", "label": "增益上限", "type": "float", "default": 4.5, "min": 0.1, "max": 20.0},
+            {"name": "power", "label": "曲线幂次", "type": "float", "default": 1.1, "min": 0.2, "max": 3.0},
+        ],
+    },
+"sliding_avg": {
         "name": "Sliding-average background removal",
         "type": "local",
         "func": method_sliding_average,
@@ -348,6 +385,17 @@ PROCESSING_METHODS = {
     },
 }
 
+
+METHOD_TAGS = {
+    "subtracting_average_2D": "推荐",
+    "agcGain": "推荐",
+    "dewow": "推荐",
+    "set_zero_time": "推荐",
+    "svd_bg": "推荐",
+    "fk_filter": "实验",
+    "hankel_svd": "实验",
+    "sliding_avg": "实验",
+}
 
 class GPRGuiQt(QMainWindow):
     def __init__(self):
@@ -419,7 +467,7 @@ class GPRGuiQt(QMainWindow):
         method_layout = QVBoxLayout(method_box)
         self.method_combo = QComboBox()
         self.method_keys = list(PROCESSING_METHODS.keys())
-        self.method_combo.addItems([PROCESSING_METHODS[k]["name"] for k in self.method_keys])
+        self.method_combo.addItems([f"{PROCESSING_METHODS[k]['name']} [{METHOD_TAGS.get(k,'')} ]".replace('  ', ' ').strip() for k in self.method_keys])
         method_layout.addWidget(self.method_combo)
         self.param_container = QWidget()
         self.param_layout = QFormLayout(self.param_container)
@@ -433,7 +481,7 @@ class GPRGuiQt(QMainWindow):
         self.batch_list = QListWidget()
         self.batch_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
         for key in self.method_keys:
-            self.batch_list.addItem(QListWidgetItem(PROCESSING_METHODS[key]["name"]))
+            self.batch_list.addItem(QListWidgetItem(f"{PROCESSING_METHODS[key]['name']} [{METHOD_TAGS.get(key,'')} ]".replace('  ', ' ').strip()))
         batch_layout.addWidget(self.batch_list)
         self.btn_batch = QPushButton("运行批处理对比")
         batch_layout.addWidget(self.btn_batch)
@@ -456,6 +504,10 @@ class GPRGuiQt(QMainWindow):
         self.chatgpt_style_var = QCheckBox("自动对比度（裁剪99%）")
         self.chatgpt_style_var.setChecked(False)
         display_body_layout.addWidget(self.chatgpt_style_var)
+
+        self.compare_var = QCheckBox("双视图对比（原始/处理）")
+        self.compare_var.setChecked(True)
+        display_body_layout.addWidget(self.compare_var)
 
         cmap_row = QWidget()
         cmap_l = QHBoxLayout(cmap_row)
@@ -512,6 +564,22 @@ class GPRGuiQt(QMainWindow):
         preprocess_layout.addWidget(preprocess_body)
         preprocess_box.toggled.connect(preprocess_body.setVisible)
         left_layout.addWidget(preprocess_box)
+
+        # ----- 处理记录 -----
+        record_box = QGroupBox("🧾 处理记录")
+        record_layout = QVBoxLayout(record_box)
+        self.record = QTextEdit()
+        self.record.setReadOnly(True)
+        self.record.setText("暂无记录")
+        record_layout.addWidget(self.record)
+        self.btn_record_clear = QPushButton("清空记录")
+        self.btn_record_clear.clicked.connect(self.record.clear)
+        self.btn_record_export = QPushButton("导出记录")
+        self.btn_record_export.clicked.connect(self.export_record)
+        record_layout.addWidget(self.btn_record_clear)
+        record_layout.addWidget(self.btn_record_export)
+        left_layout.addWidget(record_box)
+
 
         # ----- Crop -----
         crop_box = QGroupBox("✂️ 裁剪")
@@ -604,7 +672,7 @@ class GPRGuiQt(QMainWindow):
         self.cmap_combo.currentIndexChanged.connect(self._refresh_plot)
 
         for cb in [
-            self.symmetric_var, self.chatgpt_style_var, self.cmap_invert_var, self.show_cbar_var, self.show_grid_var,
+            self.symmetric_var, self.chatgpt_style_var, self.compare_var, self.cmap_invert_var, self.show_cbar_var, self.show_grid_var,
             self.percentile_var, self.normalize_var, self.demean_var,
             self.crop_enable_var, self.display_downsample_var,
         ]:
@@ -686,6 +754,11 @@ class GPRGuiQt(QMainWindow):
                 border: 1px solid #E2E8F0;
                 border-radius: 8px;
                 padding: 6px;
+            }
+            QPushButton:disabled, QLineEdit:disabled, QComboBox:disabled, QCheckBox:disabled, QListWidget:disabled, QTextEdit:disabled {
+                background: #F1F5F9;
+                color: #A0AEC0;
+                border-color: #E2E8F0;
             }
             """
         )
@@ -930,7 +1003,19 @@ class GPRGuiQt(QMainWindow):
             self.param_layout.addRow(QLabel(p["label"]), edit)
             self.param_vars[p["name"]] = (edit, p)
 
-    def _get_params(self):
+    
+    def _move_flow_item(self, direction: int):
+        row = self.flow_list.currentRow()
+        if row < 0:
+            return
+        new_row = row + direction
+        if new_row < 0 or new_row >= self.flow_list.count():
+            return
+        item = self.flow_list.takeItem(row)
+        self.flow_list.insertItem(new_row, item)
+        self.flow_list.setCurrentRow(new_row)
+
+def _get_params(self):
         params = {}
         for name, (edit, meta) in self.param_vars.items():
             raw = edit.text().strip()
@@ -943,8 +1028,8 @@ class GPRGuiQt(QMainWindow):
                     val = float(raw)
                 else:
                     val = raw
-            except Value错误:
-                raise Value错误(f"Invalid value for {meta['label']}")
+            except ValueError:
+                raise ValueError(f"Invalid value for {meta['label']}")
             params[name] = val
         return params
 
@@ -1039,19 +1124,8 @@ class GPRGuiQt(QMainWindow):
 
     # --------- Plot ---------
     def plot_data(self, data: np.ndarray):
-        self.ax.clear()
+        self.fig.clear()
         extent = None
-        if self.header_info:
-            num_traces = max(1, int(self.header_info.get("num_traces", data.shape[1])))
-            trace_interval = float(self.header_info.get("trace_interval_m", 1.0))
-            total_time = float(self.header_info.get("total_time_ns", data.shape[0]))
-            distance_end = trace_interval * (num_traces - 1)
-            extent = [0.0, distance_end, total_time, 0.0]
-            self.ax.set_xlabel("距离 (m)")
-            self.ax.set_ylabel("时间 (ns)")
-        else:
-            self.ax.set_xlabel("距离（道索引）")
-            self.ax.set_ylabel("时间（采样索引）")
 
         valid_data = np.nan_to_num(data)
         valid_data = self._apply_preprocess(valid_data)
@@ -1088,41 +1162,42 @@ class GPRGuiQt(QMainWindow):
                 pass
             self.cbar = None
 
-        if self.chatgpt_style_var.isChecked():
-            clipped, v = self._clip_for_display(display_data, clip_percent=99.0)
-            im = self.ax.imshow(
-                clipped,
-                cmap=cmap,
-                aspect="auto",
-                extent=extent,
-                vmin=-v,
-                vmax=v,
-                interpolation="nearest",
-                origin="upper",
-            )
-            self.ax.set_title(f"B-扫 (clip=±{v:.3g})")
+        if self.compare_var.isChecked() and self.original_data is not None:
+            ax_left = self.fig.add_subplot(1, 2, 1)
+            ax_right = self.fig.add_subplot(1, 2, 2)
+            axes = [ax_left, ax_right]
+            data_pairs = [
+                (self._downsample_for_display(np.nan_to_num(self.original_data)), "原始"),
+                (display_data, "处理后"),
+            ]
         else:
-            if self.symmetric_var.isChecked():
-                stdcont = np.nanmax(np.abs(display_data))
-                if stdcont == 0:
-                    stdcont = 1e-6
-                vmin = -stdcont
-                vmax = stdcont
-                im = self.ax.imshow(
-                    display_data,
+            ax_left = self.fig.add_subplot(1, 1, 1)
+            axes = [ax_left]
+            data_pairs = [(display_data, "B-扫")]
+
+        for ax, (d, title) in zip(axes, data_pairs):
+            if self.chatgpt_style_var.isChecked():
+                clipped, v = self._clip_for_display(d, clip_percent=99.0)
+                im = ax.imshow(
+                    clipped,
                     cmap=cmap,
                     aspect="auto",
                     extent=extent,
-                    vmin=vmin,
-                    vmax=vmax,
+                    vmin=-v,
+                    vmax=v,
                     interpolation="nearest",
+                    origin="upper",
                 )
+                ax.set_title(f"{title} (clip=±{v:.3g})")
             else:
-                perc_bounds = self._get_percentile_bounds(display_data)
-                if perc_bounds:
-                    vmin, vmax = perc_bounds
-                    im = self.ax.imshow(
-                        display_data,
+                if self.symmetric_var.isChecked():
+                    stdcont = np.nanmax(np.abs(d))
+                    if stdcont == 0:
+                        stdcont = 1e-6
+                    vmin = -stdcont
+                    vmax = stdcont
+                    im = ax.imshow(
+                        d,
                         cmap=cmap,
                         aspect="auto",
                         extent=extent,
@@ -1131,13 +1206,32 @@ class GPRGuiQt(QMainWindow):
                         interpolation="nearest",
                     )
                 else:
-                    im = self.ax.imshow(display_data, cmap=cmap, aspect="auto", extent=extent, interpolation="nearest")
+                    perc_bounds = self._get_percentile_bounds(d)
+                    if perc_bounds:
+                        vmin, vmax = perc_bounds
+                        im = ax.imshow(
+                            d,
+                            cmap=cmap,
+                            aspect="auto",
+                            extent=extent,
+                            vmin=vmin,
+                            vmax=vmax,
+                            interpolation="nearest",
+                        )
+                    else:
+                        im = ax.imshow(d, cmap=cmap, aspect="auto", extent=extent, interpolation="nearest")
+                ax.set_title(title)
+
+            if self.header_info:
+                ax.set_xlabel("距离 (m)")
+                ax.set_ylabel("时间 (ns)")
+            else:
+                ax.set_xlabel("距离（道索引）")
+                ax.set_ylabel("时间（采样索引）")
+            ax.grid(self.show_grid_var.isChecked(), color="#D7DEE5", alpha=0.4)
 
         if self.show_cbar_var.isChecked() and not self.chatgpt_style_var.isChecked():
-            self.cbar = self.fig.colorbar(im, ax=self.ax, fraction=0.046, pad=0.04)
-        self.ax.grid(self.show_grid_var.isChecked(), color="#D7DEE5", alpha=0.4)
-        if not self.chatgpt_style_var.isChecked():
-            self.ax.set_title("B-扫")
+            self.cbar = self.fig.colorbar(im, ax=axes, fraction=0.046, pad=0.04)
         self.canvas.draw()
 
     # --------- Save outputs ---------
@@ -1328,12 +1422,27 @@ class GPRGuiQt(QMainWindow):
 
         self._log(f"Report saved: {report_path}")
 
+    
+    def export_record(self):
+        if self.record is None:
+            return
+        text = self.record.toPlainText().strip()
+        if not text:
+            QMessageBox.information(self, "提示", "记录为空。")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "保存记录", "record.txt", "Text (*.txt);;All files (*)")
+        if not path:
+            return
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        self._log(f"记录已导出：{path}")
+
     def run_default_pipeline(self):
         if self.data is None or self.data_path is None:
             QMessageBox.warning(self, "无数据", "请先导入 CSV。")
             return
-        self._log("运行默认流程：背景抑制 → AGC")
-        order = ["subtracting_average_2D", "agcGain"]
+        self._log("运行默认流程v2：time-zero → dewow → 背景去除 → F-K → SEC → Hankel-SVD")
+        order = ["set_zero_time", "dewow", "subtracting_average_2D", "fk_filter", "sec_gain", "hankel_svd"]
         current_idx = self.method_combo.currentIndex()
         for key in order:
             if key in self.method_keys:
@@ -1407,6 +1516,9 @@ class GPRGuiQt(QMainWindow):
                     out_csv, out_png = self._save_outputs(newdata, method_key)
                     self.plot_data(newdata)
                     self._log(f"Processed data saved: {out_csv}")
+                self.status_label.setText(self.status_label.text() + f" | 最后处理:{datetime.now().strftime('%H:%M:%S')}")
+                self.record.append(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {method['name']} | {os.path.basename(out_csv)}")
+                    self.record.append(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {method['name']} | {os.path.basename(out_csv)}")
                 else:
                     self._log("Processing finished but output CSV not found.")
             else:
@@ -1419,6 +1531,9 @@ class GPRGuiQt(QMainWindow):
                 self.plot_data(newdata)
                 out_csv, out_png = self._save_outputs(newdata, method_key)
                 self._log(f"Processed data saved: {out_csv}")
+                self.status_label.setText(self.status_label.text() + f" | 最后处理:{datetime.now().strftime('%H:%M:%S')}")
+                self.record.append(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {method['name']} | {os.path.basename(out_csv)}")
+                    self.record.append(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {method['name']} | {os.path.basename(out_csv)}")
         except Exception as e:
             self._log(f"Processing error: {e}")
             QMessageBox.critical(self, "错误", f"Processing error: {e}")
