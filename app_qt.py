@@ -28,7 +28,7 @@ from scipy.ndimage import uniform_filter1d
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
 from scipy.interpolate import interp1d
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QApplication,
@@ -490,6 +490,87 @@ METHOD_TAGS = {
     "sliding_avg": "实验",
 }
 
+
+class ProcessingWorker(QObject):
+    finished = pyqtSignal(dict)
+    error = pyqtSignal(str)
+    progress = pyqtSignal(int, int, str)
+
+    def __init__(self, base_data: np.ndarray, tasks: list):
+        super().__init__()
+        self.base_data = np.array(base_data, copy=True)
+        self.tasks = tasks
+
+    def run(self):
+        current_data = np.array(self.base_data, copy=True)
+        outputs = []
+        total = len(self.tasks)
+        try:
+            for i, task in enumerate(self.tasks, start=1):
+                method_key = task["method_key"]
+                method = task["method"]
+                params = task.get("params", {})
+                out_dir = task["out_dir"]
+
+                self.progress.emit(i - 1, total, f"处理中 ({i}/{total}): {method['name']}")
+
+                if method["type"] == "core":
+                    mod = __import__(method["module"])
+                    func = getattr(mod, method["func"])
+                    length_trace = current_data.shape[0]
+                    start_position = 0
+                    end_position = current_data.shape[1]
+                    scans_per_meter = 1
+
+                    temp_in_csv = os.path.join(out_dir, "temp_in.csv")
+                    out_csv = os.path.join(out_dir, f"{method_key}_out.csv")
+                    out_png = os.path.join(out_dir, f"{method_key}_out.png")
+                    savecsv(current_data, temp_in_csv)
+
+                    if method_key == "compensatingGain":
+                        gain_min = float(params.get("gain_min", 1.0))
+                        gain_max = float(params.get("gain_max", 6.0))
+                        gain_func = np.linspace(gain_min, gain_max, current_data.shape[0]).tolist()
+                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, end_position, gain_func)
+                    elif method_key == "dewow":
+                        window = int(params.get("window", max(1, length_trace // 4)))
+                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter, window)
+                    elif method_key == "set_zero_time":
+                        new_zero_time = float(params.get("new_zero_time", 5.0))
+                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter, new_zero_time)
+                    elif method_key == "agcGain":
+                        window = int(params.get("window", max(1, length_trace // 4)))
+                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter, window)
+                    elif method_key == "subtracting_average_2D":
+                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter)
+                    elif method_key == "running_average_2D":
+                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter)
+                    else:
+                        raise RuntimeError(f"Unknown core method: {method_key}")
+
+                    if not os.path.exists(out_csv):
+                        raise RuntimeError(f"Output CSV not found: {out_csv}")
+                    newdata_df = pd.read_csv(out_csv, header=None)
+                    newdata = newdata_df.values
+                    if newdata.ndim == 1:
+                        newdata = newdata.reshape(-1, 1)
+                else:
+                    result = method["func"](current_data, **params)
+                    newdata = result[0] if isinstance(result, tuple) else result
+
+                current_data = newdata
+                outputs.append({
+                    "method_key": method_key,
+                    "method_name": method["name"],
+                    "data": np.array(newdata, copy=True),
+                })
+                self.progress.emit(i, total, f"完成 ({i}/{total}): {method['name']}")
+
+            self.finished.emit({"outputs": outputs, "final_data": current_data})
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 class GPRGuiQt(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -503,6 +584,9 @@ class GPRGuiQt(QMainWindow):
         self.original_data = None
         self.history = []
         self.cbar = None
+        self._worker_thread = None
+        self._worker = None
+        self._current_run_context = None
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -513,26 +597,26 @@ class GPRGuiQt(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         root_layout.addWidget(splitter)
 
-        # Left panel (scrollable)
+        # Left panel (controls)
         left_panel = QWidget()
-        left_panel.setMinimumWidth(320)
+        left_panel.setMinimumWidth(300)
         left_layout = QVBoxLayout(left_panel)
         left_layout.setSpacing(10)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(left_panel)
-        splitter.addWidget(scroll)
 
-        # Right panel (plot)
+        # Right panel (plot) -> move to left side of splitter for larger visual area
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(6, 6, 6, 6)
+        right_layout.setContentsMargins(4, 4, 4, 4)
         splitter.addWidget(right_panel)
+        splitter.addWidget(scroll)
 
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([360, 900])
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+        splitter.setSizes([1020, 320])
 
         # ----- Actions -----
         action_box = QGroupBox("🧰 操作")
@@ -744,13 +828,13 @@ class GPRGuiQt(QMainWindow):
         status_layout.addStretch(1)
         right_layout.addWidget(status_bar)
 
-        self.fig = Figure(figsize=(7, 5), dpi=100)
+        self.fig = Figure(figsize=(9.5, 6.4), dpi=100)
         self.ax = self.fig.add_subplot(111)
         self.ax.set_title("B-扫")
         self.ax.set_xlabel("距离（道索引）")
         self.ax.set_ylabel("时间（采样索引）")
         self.canvas = FigureCanvas(self.fig)
-        right_layout.addWidget(self.canvas)
+        right_layout.addWidget(self.canvas, 1)
 
         # ---- Signals ----
         self.btn_import.clicked.connect(self.load_csv)
@@ -777,6 +861,22 @@ class GPRGuiQt(QMainWindow):
         self._log("Welcome. Please import a CSV to view B-扫.")
 
     # --------- UI helpers ---------
+    def _set_busy(self, busy: bool, text: str = "处理中..."):
+        controls = [
+            self.btn_import, self.btn_apply, self.btn_quick, self.btn_undo, self.btn_reset,
+            self.btn_batch, self.btn_report, self.btn_apply_crop, self.btn_reset_crop,
+            self.method_combo, self.batch_list,
+        ]
+        for w in controls:
+            w.setEnabled(not busy)
+        if busy:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            self.status_label.setText(text)
+        else:
+            QApplication.restoreOverrideCursor()
+            self.status_label.setText(text)
+        QApplication.processEvents()
+
     def _pair_row(self, label1, edit1, label2, edit2):
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
@@ -1258,9 +1358,10 @@ class GPRGuiQt(QMainWindow):
             self.cbar = None
 
         if self.compare_var.isChecked() and self.original_data is not None:
-            ax_left = self.fig.add_subplot(1, 2, 1)
-            ax_right = self.fig.add_subplot(1, 2, 2)
-            axes = [ax_left, ax_right]
+            # vertical compare avoids overly flat images when width is constrained
+            ax_top = self.fig.add_subplot(2, 1, 1)
+            ax_bottom = self.fig.add_subplot(2, 1, 2)
+            axes = [ax_top, ax_bottom]
             data_pairs = [
                 (self._downsample_for_display(np.nan_to_num(self.original_data)), "原始"),
                 (display_data, "处理后"),
@@ -1532,6 +1633,70 @@ class GPRGuiQt(QMainWindow):
             f.write(text)
         self._log(f"记录已导出：{path}")
 
+    def _start_processing_worker(self, tasks: list, run_type: str, restore_method_idx: int = None):
+        if self._worker_thread is not None:
+            QMessageBox.warning(self, "忙碌", "已有任务正在执行，请稍候。")
+            return
+        self._current_run_context = {
+            "run_type": run_type,
+            "restore_method_idx": restore_method_idx,
+        }
+        self._worker_thread = QThread(self)
+        self._worker = ProcessingWorker(self.data, tasks)
+        self._worker.moveToThread(self._worker_thread)
+        self._worker_thread.started.connect(self._worker.run)
+        self._worker.progress.connect(self._on_worker_progress)
+        self._worker.finished.connect(self._on_worker_finished)
+        self._worker.error.connect(self._on_worker_error)
+        self._worker.finished.connect(self._worker_thread.quit)
+        self._worker.error.connect(self._worker_thread.quit)
+        self._worker_thread.finished.connect(self._cleanup_worker)
+        self._set_busy(True, "处理中...")
+        self._worker_thread.start()
+
+    def _on_worker_progress(self, current: int, total: int, text: str):
+        self.status_label.setText(text)
+
+    def _on_worker_finished(self, payload: dict):
+        outputs = payload.get("outputs", [])
+        final_data = payload.get("final_data")
+        if final_data is not None:
+            self.data = final_data
+
+        for out in outputs:
+            method_key = out["method_key"]
+            method_name = out["method_name"]
+            method_data = out["data"]
+            out_csv, _ = self._save_outputs(method_data, method_key)
+            self._log(f"Processed data saved: {out_csv}")
+            self.record.append(
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {method_name} | {os.path.basename(out_csv)}"
+            )
+
+        if self.data is not None:
+            self.plot_data(self.data)
+
+        ctx = self._current_run_context or {}
+        restore_idx = ctx.get("restore_method_idx")
+        if restore_idx is not None:
+            self.method_combo.setCurrentIndex(restore_idx)
+        self.status_label.setText(f"处理完成 | 最后处理:{datetime.now().strftime('%H:%M:%S')}")
+        self._set_busy(False, "就绪")
+
+    def _on_worker_error(self, err: str):
+        self._log(f"Processing error: {err}")
+        QMessageBox.critical(self, "错误", f"Processing error: {err}")
+        self._set_busy(False, "处理失败")
+
+    def _cleanup_worker(self):
+        if self._worker is not None:
+            self._worker.deleteLater()
+        if self._worker_thread is not None:
+            self._worker_thread.deleteLater()
+        self._worker = None
+        self._worker_thread = None
+        self._current_run_context = None
+
     def run_default_pipeline(self):
         if self.data is None or self.data_path is None:
             QMessageBox.warning(self, "无数据", "请先导入 CSV。")
@@ -1539,11 +1704,23 @@ class GPRGuiQt(QMainWindow):
         self._log("运行默认流程v2：time-zero → dewow → 背景去除 → F-K → SEC → Hankel-SVD")
         order = ["set_zero_time", "dewow", "subtracting_average_2D", "fk_filter", "sec_gain", "hankel_svd"]
         current_idx = self.method_combo.currentIndex()
+        tasks = []
+        out_dir = os.path.join(BASE_DIR, "output")
+        os.makedirs(out_dir, exist_ok=True)
         for key in order:
             if key in self.method_keys:
-                self.method_combo.setCurrentIndex(self.method_keys.index(key))
-                self.apply_method()
-        self.method_combo.setCurrentIndex(current_idx)
+                method = PROCESSING_METHODS[key]
+                params = {p["name"]: p.get("default") for p in method.get("params", [])}
+                tasks.append({
+                    "method_key": key,
+                    "method": method,
+                    "params": params,
+                    "out_dir": out_dir,
+                })
+        if not tasks:
+            return
+        self._push_history()
+        self._start_processing_worker(tasks, run_type="pipeline", restore_method_idx=current_idx)
 
     # --------- Apply ---------
     def apply_method(self):
@@ -1564,72 +1741,13 @@ class GPRGuiQt(QMainWindow):
 
         out_dir = os.path.join(BASE_DIR, "output")
         os.makedirs(out_dir, exist_ok=True)
-        out_csv = os.path.join(out_dir, f"{method_key}_out.csv")
-        out_png = os.path.join(out_dir, f"{method_key}_out.png")
-
-        try:
-            if method["type"] == "core":
-                mod = __import__(method["module"])
-                func = getattr(mod, method["func"])
-                length_trace = self.data.shape[0]
-                start_position = 0
-                end_position = self.data.shape[1]
-                scans_per_meter = 1
-
-                temp_in_csv = os.path.join(out_dir, "temp_in.csv")
-                savecsv(self.data, temp_in_csv)
-
-                if method_key == "compensatingGain":
-                    gain_min = float(params.get("gain_min", 1.0))
-                    gain_max = float(params.get("gain_max", 6.0))
-                    gain_func = np.linspace(gain_min, gain_max, self.data.shape[0]).tolist()
-                    func(temp_in_csv, out_csv, out_png, length_trace, start_position, end_position, gain_func)
-                elif method_key == "dewow":
-                    window = int(params.get("window", max(1, length_trace // 4)))
-                    func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter, window)
-                elif method_key == "set_zero_time":
-                    new_zero_time = float(params.get("new_zero_time", 5.0))
-                    func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter, new_zero_time)
-                elif method_key == "agcGain":
-                    window = int(params.get("window", max(1, length_trace // 4)))
-                    func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter, window)
-                elif method_key == "subtracting_average_2D":
-                    func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter)
-                elif method_key == "running_average_2D":
-                    func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter)
-                else:
-                    self._log("Unknown core method; no processing applied.")
-                    self.plot_data(self.data)
-                    return
-
-                if os.path.exists(out_csv):
-                    newdata_df = pd.read_csv(out_csv, header=None)
-                    newdata = newdata_df.values
-                    if newdata.ndim == 1:
-                        newdata = newdata.reshape(-1, 1)
-                    self.data = newdata
-                    out_csv, out_png = self._save_outputs(newdata, method_key)
-                    self.plot_data(newdata)
-                    self._log(f"Processed data saved: {out_csv}")
-                    self.status_label.setText(self.status_label.text() + f" | 最后处理:{datetime.now().strftime('%H:%M:%S')}")
-                    self.record.append(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {method['name']} | {os.path.basename(out_csv)}")
-                else:
-                    self._log("Processing finished but output CSV not found.")
-            else:
-                result = method["func"](self.data, **params)
-                if isinstance(result, tuple):
-                    newdata = result[0]
-                else:
-                    newdata = result
-                self.data = newdata
-                self.plot_data(newdata)
-                out_csv, out_png = self._save_outputs(newdata, method_key)
-                self._log(f"Processed data saved: {out_csv}")
-                self.status_label.setText(self.status_label.text() + f" | 最后处理:{datetime.now().strftime('%H:%M:%S')}")
-                self.record.append(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {method['name']} | {os.path.basename(out_csv)}")
-        except Exception as e:
-            self._log(f"Processing error: {e}")
-            QMessageBox.critical(self, "错误", f"Processing error: {e}")
+        task = {
+            "method_key": method_key,
+            "method": method,
+            "params": params,
+            "out_dir": out_dir,
+        }
+        self._start_processing_worker([task], run_type="single")
 
 
 def apply_theme(app: QApplication):
