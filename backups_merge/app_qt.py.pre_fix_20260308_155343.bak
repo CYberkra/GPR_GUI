@@ -22,8 +22,6 @@ import matplotlib
 matplotlib.use("QtAgg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-matplotlib.rcParams['font.sans-serif'] = ['Noto Sans CJK SC', 'Microsoft YaHei', 'SimHei', 'Arial Unicode MS', 'DejaVu Sans']
-matplotlib.rcParams['axes.unicode_minus'] = False
 
 from scipy.linalg import svd
 from scipy.ndimage import uniform_filter1d
@@ -388,13 +386,6 @@ PROCESSING_METHODS = {
 }
 
 
-
-PREFERRED_METHOD_ORDER = [
-    "set_zero_time", "dewow", "subtracting_average_2D", "fk_filter", "sec_gain", "hankel_svd",
-    "agcGain", "svd_bg", "sliding_avg", "running_average_2D", "compensatingGain",
-    "rpca_placeholder", "wnnm_placeholder",
-]
-
 METHOD_TAGS = {
     "subtracting_average_2D": "推荐",
     "agcGain": "推荐",
@@ -475,9 +466,7 @@ class GPRGuiQt(QMainWindow):
         method_box = QGroupBox("🧪 方法")
         method_layout = QVBoxLayout(method_box)
         self.method_combo = QComboBox()
-        ordered = [k for k in PREFERRED_METHOD_ORDER if k in PROCESSING_METHODS]
-        tail = [k for k in PROCESSING_METHODS.keys() if k not in ordered]
-        self.method_keys = ordered + tail
+        self.method_keys = list(PROCESSING_METHODS.keys())
         self.method_combo.addItems([f"{PROCESSING_METHODS[k]['name']} [{METHOD_TAGS.get(k,'')} ]".replace('  ', ' ').strip() for k in self.method_keys])
         method_layout.addWidget(self.method_combo)
         self.param_container = QWidget()
@@ -494,9 +483,7 @@ class GPRGuiQt(QMainWindow):
         for key in self.method_keys:
             self.batch_list.addItem(QListWidgetItem(f"{PROCESSING_METHODS[key]['name']} [{METHOD_TAGS.get(key,'')} ]".replace('  ', ' ').strip()))
         batch_layout.addWidget(self.batch_list)
-        self.btn_batch = QPushButton("批处理功能维护中")
-        self.btn_batch.setEnabled(False)
-        self.btn_batch.setToolTip("已临时关闭：该功能存在稳定性问题，待修复后恢复")
+        self.btn_batch = QPushButton("运行批处理对比")
         batch_layout.addWidget(self.btn_batch)
         self.btn_report = QPushButton("生成报告")
         batch_layout.addWidget(self.btn_report)
@@ -676,6 +663,7 @@ class GPRGuiQt(QMainWindow):
         self.btn_quick.clicked.connect(self.run_default_pipeline)
         self.btn_undo.clicked.connect(self.undo_last)
         self.btn_reset.clicked.connect(self.reset_original)
+        self.btn_batch.clicked.connect(self.run_batch)
         self.btn_report.clicked.connect(self.generate_report)
         self.btn_apply_crop.clicked.connect(self._refresh_plot)
         self.btn_reset_crop.clicked.connect(self._reset_crop)
