@@ -209,19 +209,29 @@ def method_hankel_svd(data, window_length=None, rank=None, **kwargs):
     window_length = min(window_length, ny - 1)
 
     result = np.zeros_like(data)
+    m = ny - window_length + 1
+
+    # 【优化1】预先计算分母 (counts)，因为对于这幅图的每一道，重构的重叠次数是完全一样的
+    counts = np.zeros(ny)
+    if m > 0:
+        for j in range(window_length):
+            counts[j:j + m] += 1
+
     for col in range(nx):
         trace = data[:, col]
-        m = ny - window_length + 1
         if m <= 0:
             result[:, col] = trace
             continue
 
+        # 构建 Hankel 矩阵
         hankel = np.zeros((m, window_length))
         for i in range(window_length):
             hankel[:, i] = trace[i:i + m]
 
+        # SVD 分解
         U, S, Vt = svd(hankel, full_matrices=False)
 
+        # 自动选阶逻辑
         if rank is None or rank <= 0:
             diff_spec = np.diff(S)
             threshold = np.mean(np.abs(diff_spec))
@@ -235,20 +245,18 @@ def method_hankel_svd(data, window_length=None, rank=None, **kwargs):
         else:
             rank_val = max(rank, 1)
 
+        # 低秩重构
         S_filtered = np.zeros_like(S)
         S_filtered[:rank_val] = S[:rank_val]
         hankel_filtered = (U * S_filtered) @ Vt
 
+        # 【核心优化2】：向量化对角线相加，彻底消灭双重 Python 循环
         trace_filtered = np.zeros(ny)
-        counts = np.zeros(ny)
+        for j in range(window_length):
+            # 直接利用 numpy 的数组切片进行整列相加
+            trace_filtered[j:j + m] += hankel_filtered[:, j]
 
-        for i in range(m):
-            for j in range(window_length):
-                trace_filtered[i + j] += hankel_filtered[i, j]
-                counts[i + j] += 1
-
-        trace_filtered /= counts
-        result[:, col] = trace_filtered
+        result[:, col] = trace_filtered / counts
 
     return result, None
 
