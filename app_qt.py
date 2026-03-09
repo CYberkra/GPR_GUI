@@ -654,6 +654,8 @@ class GPRGuiQt(QMainWindow):
         self._plot_timer.setSingleShot(True)
         self._plot_timer.timeout.connect(self._do_refresh_plot)
         self._ds_cache = {}
+        self.compare_snapshots = []
+        self._compare_syncing = False
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -751,9 +753,20 @@ class GPRGuiQt(QMainWindow):
         self.chatgpt_style_var.setChecked(False)
         display_body_layout.addWidget(self.chatgpt_style_var)
 
-        self.compare_var = QCheckBox("双视图对比（原始/处理）")
-        self.compare_var.setChecked(True)
+        self.compare_var = QCheckBox("双视图对比")
+        self.compare_var.setChecked(False)
         display_body_layout.addWidget(self.compare_var)
+
+        compare_row = QWidget()
+        compare_l = QHBoxLayout(compare_row)
+        compare_l.setContentsMargins(0, 0, 0, 0)
+        compare_l.addWidget(QLabel("对比"))
+        self.compare_left_combo = QComboBox()
+        self.compare_right_combo = QComboBox()
+        compare_l.addWidget(self.compare_left_combo)
+        compare_l.addWidget(QLabel("vs"))
+        compare_l.addWidget(self.compare_right_combo)
+        display_body_layout.addWidget(compare_row)
 
         cmap_row = QWidget()
         cmap_l = QHBoxLayout(cmap_row)
@@ -916,6 +929,8 @@ class GPRGuiQt(QMainWindow):
 
         self.method_combo.currentIndexChanged.connect(self._on_method_change)
         self.cmap_combo.currentIndexChanged.connect(self._refresh_plot)
+        self.compare_left_combo.currentIndexChanged.connect(self._refresh_plot)
+        self.compare_right_combo.currentIndexChanged.connect(self._refresh_plot)
 
         for cb in [
             self.symmetric_var, self.chatgpt_style_var, self.compare_var, self.cmap_invert_var, self.show_cbar_var, self.show_grid_var,
@@ -923,6 +938,10 @@ class GPRGuiQt(QMainWindow):
             self.crop_enable_var, self.display_downsample_var,
         ]:
             cb.stateChanged.connect(self._refresh_plot)
+
+        self.compare_var.toggled.connect(self._on_compare_toggled)
+        self._on_compare_toggled(self.compare_var.isChecked())
+        self._set_compare_snapshots([])
 
         self._render_params(self.method_keys[0])
         self._log("Welcome. Please import a CSV to view B-扫.")
@@ -1048,6 +1067,7 @@ class GPRGuiQt(QMainWindow):
             QMessageBox.information(self, "撤销", "无可恢复的历史状态。")
             return
         self.data = self.history.pop()
+        self._update_current_compare_snapshot()
         self.plot_data(self.data)
         self._log("撤销: restored previous state.")
 
@@ -1057,8 +1077,53 @@ class GPRGuiQt(QMainWindow):
             return
         self._push_history()
         self.data = self.original_data.copy()
+        self._set_compare_snapshots([
+            {"label": "原始", "data": self.original_data},
+            {"label": "当前", "data": self.data},
+        ])
         self.plot_data(self.data)
         self._log("重置: restored original data.")
+
+    def _on_compare_toggled(self, checked: bool):
+        self.compare_left_combo.setEnabled(checked)
+        self.compare_right_combo.setEnabled(checked)
+
+    def _set_compare_snapshots(self, snapshots: list):
+        cleaned = []
+        for item in snapshots:
+            if not item:
+                continue
+            label = str(item.get("label", "阶段"))
+            data = item.get("data")
+            if data is None:
+                continue
+            cleaned.append({"label": label, "data": np.array(data, copy=True)})
+        self.compare_snapshots = cleaned
+
+        self._compare_syncing = True
+        try:
+            self.compare_left_combo.clear()
+            self.compare_right_combo.clear()
+            for s in self.compare_snapshots:
+                self.compare_left_combo.addItem(s["label"])
+                self.compare_right_combo.addItem(s["label"])
+            if self.compare_snapshots:
+                self.compare_left_combo.setCurrentIndex(0)
+                right_idx = 1 if len(self.compare_snapshots) > 1 else 0
+                self.compare_right_combo.setCurrentIndex(right_idx)
+        finally:
+            self._compare_syncing = False
+
+    def _update_current_compare_snapshot(self):
+        if self.data is None:
+            return
+        if not self.compare_snapshots:
+            self._set_compare_snapshots([
+                {"label": "原始", "data": self.original_data if self.original_data is not None else self.data},
+                {"label": "当前", "data": self.data},
+            ])
+            return
+        self.compare_snapshots[-1] = {"label": self.compare_snapshots[-1]["label"], "data": np.array(self.data, copy=True)}
 
     # --------- UI callbacks ---------
     def _on_method_change(self, idx=None):
@@ -1367,6 +1432,10 @@ class GPRGuiQt(QMainWindow):
             self.header_info = header_info
             self.original_data = data.copy()
             self.history = []
+            self._set_compare_snapshots([
+                {"label": "原始", "data": self.original_data},
+                {"label": "当前", "data": self.data},
+            ])
 
             self._log(f"已加载 CSV： {path}  shape={data.shape}")
             if header_info:
@@ -1432,15 +1501,29 @@ class GPRGuiQt(QMainWindow):
                 pass
             self.cbar = None
 
-        if self.compare_var.isChecked() and self.original_data is not None:
-            # vertical compare avoids overly flat images when width is constrained
+        if self.compare_var.isChecked() and len(self.compare_snapshots) >= 1:
+            left_idx = self.compare_left_combo.currentIndex()
+            right_idx = self.compare_right_combo.currentIndex()
+            if left_idx < 0:
+                left_idx = 0
+            if right_idx < 0:
+                right_idx = 0
+            left_idx = min(left_idx, len(self.compare_snapshots) - 1)
+            right_idx = min(right_idx, len(self.compare_snapshots) - 1)
+            pair_indices = [left_idx, right_idx]
+            if len(self.compare_snapshots) == 1:
+                pair_indices = [0, 0]
+
             ax_top = self.fig.add_subplot(2, 1, 1)
             ax_bottom = self.fig.add_subplot(2, 1, 2)
             axes = [ax_top, ax_bottom]
-            data_pairs = [
-                (self._downsample_for_display(np.nan_to_num(self.original_data)), "原始"),
-                (display_data, "处理后"),
-            ]
+            data_pairs = []
+            for idx in pair_indices:
+                snap = self.compare_snapshots[idx]
+                snap_data = self._apply_preprocess(np.nan_to_num(snap["data"]))
+                snap_data, _ = self._apply_crop(snap_data)
+                snap_data = self._downsample_for_display(snap_data)
+                data_pairs.append((snap_data, snap["label"]))
         else:
             ax_left = self.fig.add_subplot(1, 1, 1)
             axes = [ax_left]
@@ -1685,6 +1768,10 @@ class GPRGuiQt(QMainWindow):
         if final_data is not None:
             self.data = final_data
 
+        compare_snapshots = []
+        if self.original_data is not None:
+            compare_snapshots.append({"label": "原始", "data": self.original_data})
+
         for out in outputs:
             method_key = out["method_key"]
             method_name = out["method_name"]
@@ -1694,8 +1781,14 @@ class GPRGuiQt(QMainWindow):
             self.record.append(
                 f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {method_name} | {os.path.basename(out_csv)}"
             )
+            compare_snapshots.append({"label": method_name, "data": method_data})
 
         if self.data is not None:
+            if compare_snapshots:
+                compare_snapshots.append({"label": "当前", "data": self.data})
+                self._set_compare_snapshots(compare_snapshots)
+            else:
+                self._update_current_compare_snapshot()
             self.plot_data(self.data)
 
         ctx = self._current_run_context or {}

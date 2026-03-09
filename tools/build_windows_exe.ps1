@@ -5,6 +5,10 @@ $repo = 'E:\Openclaw\.openclaw\workspace\repos\GPR_GUI'
 $core = 'E:\Openclaw\.openclaw\workspace\repos\PythonModule_core'
 Set-Location $repo
 
+$shortHash = (git rev-parse --short HEAD).Trim()
+$releaseVersion = (Get-Date -Format 'yyyy.MM.dd') + '+' + $shortHash
+$releaseExeName = "GPR_GUI_Qt_v$releaseVersion"
+
 $py = Join-Path $repo '.venv_winbuild\Scripts\python.exe'
 if (!(Test-Path $py)) {
   py -3.10 -m venv .venv_winbuild
@@ -29,4 +33,10 @@ foreach($h in $hidden){ $hargs += @('--hidden-import', $h) }
 & $py -m PyInstaller --noconfirm --clean --onefile --windowed --name GPR_GUI_Qt `
   --paths $core --add-data "assets;assets" --add-data "read_file_data.py;." @hargs app_qt.py
 
-Write-Output (Join-Path $repo 'dist\GPR_GUI_Qt.exe')
+$distDir = Join-Path $repo 'dist'
+$sourceExe = Join-Path $distDir 'GPR_GUI_Qt.exe'
+$releaseExe = Join-Path $distDir ($releaseExeName + '.exe')
+Copy-Item $sourceExe $releaseExe -Force
+Set-Content -Path (Join-Path $distDir 'RELEASE_VERSION.txt') -Value $releaseVersion -Encoding utf8
+
+Write-Output $releaseExe
