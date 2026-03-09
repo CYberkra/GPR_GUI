@@ -28,7 +28,7 @@ from scipy.ndimage import uniform_filter1d
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
 from scipy.interpolate import interp1d
 
-from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QObject, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QApplication,
@@ -77,6 +77,36 @@ for _p in _read_file_candidates:
         sys.path.insert(0, _p)
 
 from read_file_data import savecsv, save_image
+
+_CORE_FUNC_CACHE = {}
+
+
+def _get_core_func(module_name: str, func_name: str):
+    key = (module_name, func_name)
+    fn = _CORE_FUNC_CACHE.get(key)
+    if fn is None:
+        mod = __import__(module_name)
+        fn = getattr(mod, func_name)
+        _CORE_FUNC_CACHE[key] = fn
+    return fn
+
+
+def _read_matrix_csv_fast(path: str) -> np.ndarray:
+    """CSV matrix reader optimized for dense numeric GPR outputs."""
+    try:
+        df = pd.read_csv(path, header=None, na_filter=False, low_memory=False)
+        return df.values
+    except Exception:
+        arr = np.loadtxt(path, delimiter=",", dtype=float)
+        if arr.ndim == 1:
+            arr = arr.reshape(-1, 1)
+        return arr
+
+
+def _downsample_axis_linear(n: int, max_n: int):
+    if max_n <= 0 or n <= max_n:
+        return slice(None)
+    return np.linspace(0, n - 1, max_n, dtype=int)
 
 
 # ------------------ CSV header parsing ------------------
@@ -211,7 +241,6 @@ def method_hankel_svd(data, window_length=None, rank=None, **kwargs):
     result = np.zeros_like(data)
     m = ny - window_length + 1
 
-    # 【优化1】预先计算分母 (counts)，因为对于这幅图的每一道，重构的重叠次数是完全一样的
     counts = np.zeros(ny)
     if m > 0:
         for j in range(window_length):
@@ -223,15 +252,12 @@ def method_hankel_svd(data, window_length=None, rank=None, **kwargs):
             result[:, col] = trace
             continue
 
-        # 构建 Hankel 矩阵
         hankel = np.zeros((m, window_length))
         for i in range(window_length):
             hankel[:, i] = trace[i:i + m]
 
-        # SVD 分解
         U, S, Vt = svd(hankel, full_matrices=False)
 
-        # 自动选阶逻辑
         if rank is None or rank <= 0:
             diff_spec = np.diff(S)
             threshold = np.mean(np.abs(diff_spec))
@@ -245,15 +271,12 @@ def method_hankel_svd(data, window_length=None, rank=None, **kwargs):
         else:
             rank_val = max(rank, 1)
 
-        # 低秩重构
         S_filtered = np.zeros_like(S)
         S_filtered[:rank_val] = S[:rank_val]
         hankel_filtered = (U * S_filtered) @ Vt
 
-        # 【核心优化2】：向量化对角线相加，彻底消灭双重 Python 循环
         trace_filtered = np.zeros(ny)
         for j in range(window_length):
-            # 直接利用 numpy 的数组切片进行整列相加
             trace_filtered[j:j + m] += hankel_filtered[:, j]
 
         result[:, col] = trace_filtered / counts
@@ -523,16 +546,15 @@ class ProcessingWorker(QObject):
                 self.progress.emit(i - 1, total, f"处理中 ({i}/{total}): {method['name']}")
 
                 if method["type"] == "core":
-                    mod = __import__(method["module"])
-                    func = getattr(mod, method["func"])
+                    func = _get_core_func(method["module"], method["func"])
                     length_trace = current_data.shape[0]
                     start_position = 0
                     end_position = current_data.shape[1]
                     scans_per_meter = 1
 
-                    temp_in_csv = os.path.join(out_dir, "temp_in.csv")
-                    out_csv = os.path.join(out_dir, f"{method_key}_out.csv")
-                    out_png = os.path.join(out_dir, f"{method_key}_out.png")
+                    temp_in_csv = os.path.join(out_dir, "__tmp_in.csv")
+                    out_csv = os.path.join(out_dir, f"__tmp_{i}_{method_key}_out.csv")
+                    out_png = os.path.join(out_dir, f"__tmp_{i}_{method_key}_out.png")
                     savecsv(current_data, temp_in_csv)
 
                     if method_key == "compensatingGain":
@@ -558,8 +580,7 @@ class ProcessingWorker(QObject):
 
                     if not os.path.exists(out_csv):
                         raise RuntimeError(f"Output CSV not found: {out_csv}")
-                    newdata_df = pd.read_csv(out_csv, header=None)
-                    newdata = newdata_df.values
+                    newdata = _read_matrix_csv_fast(out_csv)
                     if newdata.ndim == 1:
                         newdata = newdata.reshape(-1, 1)
                 else:
@@ -595,6 +616,10 @@ class GPRGuiQt(QMainWindow):
         self._worker_thread = None
         self._worker = None
         self._current_run_context = None
+        self._plot_timer = QTimer(self)
+        self._plot_timer.setSingleShot(True)
+        self._plot_timer.timeout.connect(self._do_refresh_plot)
+        self._ds_cache = {}
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -1008,6 +1033,12 @@ class GPRGuiQt(QMainWindow):
         self._render_params(key)
 
     def _refresh_plot(self):
+        if self.data is None:
+            return
+        # debounce frequent UI-triggered redraws
+        self._plot_timer.start(30)
+
+    def _do_refresh_plot(self):
         if self.data is not None:
             self.plot_data(self.data)
 
@@ -1157,6 +1188,17 @@ class GPRGuiQt(QMainWindow):
         cropped = data[t0:t1 + 1, d0:d1 + 1]
         return cropped, bounds
 
+    def _get_downsample_indices(self, n_time: int, n_dist: int, max_samples: int, max_traces: int):
+        key = (n_time, n_dist, max_samples, max_traces)
+        if key in self._ds_cache:
+            return self._ds_cache[key]
+        t_idx = _downsample_axis_linear(n_time, max_samples)
+        d_idx = _downsample_axis_linear(n_dist, max_traces)
+        if len(self._ds_cache) > 64:
+            self._ds_cache.clear()
+        self._ds_cache[key] = (t_idx, d_idx)
+        return t_idx, d_idx
+
     def _downsample_data(self, data: np.ndarray) -> np.ndarray:
         if not self.fast_preview_var.isChecked():
             return data
@@ -1166,13 +1208,8 @@ class GPRGuiQt(QMainWindow):
         except Exception:
             return data
         n_time, n_dist = data.shape
-        if max_samples > 0 and n_time > max_samples:
-            idx = np.linspace(0, n_time - 1, max_samples).astype(int)
-            data = data[idx, :]
-        if max_traces > 0 and n_dist > max_traces:
-            idx = np.linspace(0, n_dist - 1, max_traces).astype(int)
-            data = data[:, idx]
-        return data
+        t_idx, d_idx = self._get_downsample_indices(n_time, n_dist, max_samples, max_traces)
+        return data[t_idx, :][:, d_idx]
 
     def _downsample_for_display(self, data: np.ndarray) -> np.ndarray:
         if not self.display_downsample_var.isChecked():
@@ -1183,13 +1220,8 @@ class GPRGuiQt(QMainWindow):
         except Exception:
             return data
         n_time, n_dist = data.shape
-        if max_samples > 0 and n_time > max_samples:
-            idx = np.linspace(0, n_time - 1, max_samples).astype(int)
-            data = data[idx, :]
-        if max_traces > 0 and n_dist > max_traces:
-            idx = np.linspace(0, n_dist - 1, max_traces).astype(int)
-            data = data[:, idx]
-        return data
+        t_idx, d_idx = self._get_downsample_indices(n_time, n_dist, max_samples, max_traces)
+        return data[t_idx, :][:, d_idx]
 
     # --------- Params rendering ---------
     def _render_params(self, method_key: str):
@@ -1264,9 +1296,10 @@ class GPRGuiQt(QMainWindow):
                     if count >= target_rows:
                         break
                 df = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+                raw_data = df.values
             else:
-                df = pd.read_csv(path, header=None, skiprows=skip_lines)
-            raw_data = df.values
+                df = pd.read_csv(path, header=None, skiprows=skip_lines, na_filter=False, low_memory=False)
+                raw_data = df.values
 
             if header_info:
                 samples = header_info["a_scan_length"]
@@ -1436,7 +1469,7 @@ class GPRGuiQt(QMainWindow):
 
         if self.show_cbar_var.isChecked() and not self.chatgpt_style_var.isChecked():
             self.cbar = self.fig.colorbar(im, ax=axes, fraction=0.046, pad=0.04)
-        self.canvas.draw()
+        self.canvas.draw_idle()
 
     # --------- Save outputs ---------
     def _save_outputs(self, data: np.ndarray, method_key: str):
@@ -1483,77 +1516,24 @@ class GPRGuiQt(QMainWindow):
             QMessageBox.warning(self, "No selection", "Please select methods for batch processing.")
             return
 
-        self._push_history()
-        base_data = self.data
-        last_data = None
+        out_dir = os.path.join(BASE_DIR, "output")
+        os.makedirs(out_dir, exist_ok=True)
+        tasks = []
         for idx in selected:
             method_key = self.method_keys[idx]
             method = PROCESSING_METHODS[method_key]
-            self._log(f"Batch: {method['name']}")
+            params = {p["name"]: p.get("default") for p in method.get("params", [])}
+            tasks.append({
+                "method_key": method_key,
+                "method": method,
+                "params": params,
+                "out_dir": out_dir,
+            })
+            self._log(f"Batch queued: {method['name']}")
 
-            params = {}
-            for p in method.get("params", []):
-                params[p["name"]] = p.get("default")
+        self._push_history()
+        self._start_processing_worker(tasks, run_type="batch")
 
-            try:
-                if method["type"] == "core":
-                    mod = __import__(method["module"])
-                    func = getattr(mod, method["func"])
-                    length_trace = base_data.shape[0]
-                    start_position = 0
-                    end_position = base_data.shape[1]
-                    scans_per_meter = 1
-
-                    temp_in_csv = os.path.join(BASE_DIR, "output", "temp_in.csv")
-                    savecsv(base_data, temp_in_csv)
-
-                    out_dir = os.path.join(BASE_DIR, "output")
-                    os.makedirs(out_dir, exist_ok=True)
-                    out_csv = os.path.join(out_dir, f"{method_key}_out.csv")
-                    out_png = os.path.join(out_dir, f"{method_key}_out.png")
-
-                    if method_key == "compensatingGain":
-                        gain_min = float(params.get("gain_min", 1.0))
-                        gain_max = float(params.get("gain_max", 6.0))
-                        gain_func = np.linspace(gain_min, gain_max, base_data.shape[0]).tolist()
-                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, end_position, gain_func)
-                    elif method_key == "dewow":
-                        window = int(params.get("window", max(1, length_trace // 4)))
-                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter, window)
-                    elif method_key == "set_zero_time":
-                        new_zero_time = float(params.get("new_zero_time", 5.0))
-                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter, new_zero_time)
-                    elif method_key == "agcGain":
-                        window = int(params.get("window", max(1, length_trace // 4)))
-                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter, window)
-                    elif method_key == "subtracting_average_2D":
-                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter)
-                    elif method_key == "running_average_2D":
-                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter)
-                    else:
-                        self._log("Unknown core method; skipped.")
-                        continue
-
-                    if os.path.exists(out_csv):
-                        newdata_df = pd.read_csv(out_csv, header=None)
-                        newdata = newdata_df.values
-                        if newdata.ndim == 1:
-                            newdata = newdata.reshape(-1, 1)
-                        last_data = newdata
-                        self._save_outputs(newdata, method_key)
-                        self._log(f"Batch saved: {out_csv}")
-                else:
-                    result = method["func"](base_data, **params)
-                    newdata = result[0] if isinstance(result, tuple) else result
-                    last_data = newdata
-                    out_csv, _ = self._save_outputs(newdata, method_key)
-                    self._log(f"Batch saved: {out_csv}")
-            except Exception as e:
-                self._log(f"Batch error ({method_key}): {e}")
-
-        if last_data is not None:
-            self.data = last_data
-            self.plot_data(self.data)
 
     # --------- Report ---------
     def generate_report(self):
