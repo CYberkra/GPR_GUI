@@ -20,6 +20,7 @@ import pandas as pd
 
 import matplotlib
 matplotlib.use("QtAgg")
+from matplotlib import font_manager as fm
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
@@ -79,6 +80,36 @@ for _p in _read_file_candidates:
 from read_file_data import savecsv, save_image
 
 _CORE_FUNC_CACHE = {}
+
+
+def _configure_matplotlib_cjk_fonts() -> None:
+    """Configure a safe CJK font fallback chain for Matplotlib titles/labels."""
+    preferred_fonts = [
+        "Microsoft YaHei",
+        "SimHei",
+        "Noto Sans CJK SC",
+        "Source Han Sans SC",
+        "PingFang SC",
+        "WenQuanYi Zen Hei",
+        "Arial Unicode MS",
+    ]
+    try:
+        installed = {f.name for f in fm.fontManager.ttflist}
+    except Exception:
+        installed = set()
+
+    available = [name for name in preferred_fonts if name in installed]
+    # Keep DejaVu Sans in the tail for ASCII/number glyph safety.
+    fallback_chain = available + ["DejaVu Sans"]
+
+    try:
+        matplotlib.rcParams["font.sans-serif"] = fallback_chain
+        matplotlib.rcParams["font.family"] = "sans-serif"
+        # Avoid minus sign rendering issues under some CJK fonts on Windows.
+        matplotlib.rcParams["axes.unicode_minus"] = False
+    except Exception:
+        # Safe downgrade: if rcParams update fails, keep defaults without crashing.
+        pass
 
 
 def _get_core_func(module_name: str, func_name: str):
@@ -598,6 +629,9 @@ class ProcessingWorker(QObject):
             self.finished.emit({"outputs": outputs, "final_data": current_data})
         except Exception as e:
             self.error.emit(str(e))
+
+
+_configure_matplotlib_cjk_fonts()
 
 
 class GPRGuiQt(QMainWindow):
