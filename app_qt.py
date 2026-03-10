@@ -1663,6 +1663,15 @@ class GPRGuiQt(QMainWindow):
         ax.set_xlabel(labels["xlabel"])
         ax.set_ylabel(labels["ylabel"])
 
+    def _render_data_pairs(self, axes, data_pairs, cmap, extent, plot_config):
+        last_im = None
+        for ax, (d, title) in zip(axes, data_pairs):
+            last_im, title_suffix = self._draw_image_with_colormap(ax, d, cmap, extent)
+            ax.set_title(f"{title}{title_suffix}")
+            self._apply_axis_labels(ax, plot_config)
+            self._apply_axis_grid(ax)
+        return last_im
+
     def plot_data(self, data: np.ndarray):
         start_ts = time.perf_counter()
         self.fig.clear()
@@ -1682,13 +1691,7 @@ class GPRGuiQt(QMainWindow):
 
         data_pairs = self._build_compare_data_pairs(display_data)
         axes = self._create_plot_axes(len(data_pairs))
-
-        last_im = None
-        for ax, (d, title) in zip(axes, data_pairs):
-            last_im, title_suffix = self._draw_image_with_colormap(ax, d, cmap, extent)
-            ax.set_title(f"{title}{title_suffix}")
-            self._apply_axis_labels(ax, plot_config)
-            self._apply_axis_grid(ax)
+        last_im = self._render_data_pairs(axes, data_pairs, cmap, extent, plot_config)
 
         if last_im is not None:
             self._draw_colorbar_if_needed(last_im, axes)
