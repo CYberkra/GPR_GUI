@@ -14,6 +14,7 @@ import os
 import sys
 import re
 import time
+import subprocess
 from datetime import datetime
 
 import numpy as np
@@ -81,6 +82,47 @@ for _p in _read_file_candidates:
 from read_file_data import savecsv, save_image
 
 _CORE_FUNC_CACHE = {}
+
+
+def _read_first_existing_text(paths):
+    for path in paths:
+        try:
+            if os.path.isfile(path):
+                with open(path, "r", encoding="utf-8-sig") as f:
+                    text = f.read().strip()
+                if text:
+                    return text
+        except Exception:
+            continue
+    return None
+
+
+def _get_git_short_sha(base_dir: str) -> str:
+    try:
+        proc = subprocess.run(
+            ["git", "-C", base_dir, "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return proc.stdout.strip() or "nogit"
+    except Exception:
+        return "nogit"
+
+
+def build_version_string(app_name: str = "GPR_GUI") -> str:
+    release_candidates = [
+        os.path.join(BASE_DIR, "dist", "RELEASE_VERSION.txt"),
+        os.path.join(os.path.dirname(BASE_DIR), "dist", "RELEASE_VERSION.txt"),
+        os.path.join(BASE_DIR, "RELEASE_VERSION.txt"),
+        os.path.join(BASE_DIR, "VERSION"),
+    ]
+    release = _read_first_existing_text(release_candidates)
+    shortsha = _get_git_short_sha(BASE_DIR)
+    if release:
+        return f"{app_name} {release} ({shortsha})"
+    stamp = datetime.now().strftime("%Y%m%d")
+    return f"{app_name} dev-{stamp} ({shortsha})"
 
 
 def _configure_matplotlib_cjk_fonts() -> None:
@@ -636,9 +678,10 @@ _configure_matplotlib_cjk_fonts()
 
 
 class GPRGuiQt(QMainWindow):
-    def __init__(self):
+    def __init__(self, version_text: str = ""):
         super().__init__()
-        self.setWindowTitle("GPR 图像处理 - PyQt")
+        self.version_text = version_text.strip() or "GPR_GUI"
+        self.setWindowTitle(self.version_text)
         self.resize(1280, 800)
         self._apply_style()
 
@@ -913,6 +956,9 @@ class GPRGuiQt(QMainWindow):
         self.status_label.setStyleSheet("color:#718096;")
         status_layout.addWidget(self.status_label)
         status_layout.addStretch(1)
+        self.version_label = QLabel(self.version_text)
+        self.version_label.setStyleSheet("color:#4A5568;")
+        status_layout.addWidget(self.version_label)
         right_layout.addWidget(status_bar)
 
         self.fig = Figure(figsize=(9.5, 6.4), dpi=100)
@@ -951,6 +997,7 @@ class GPRGuiQt(QMainWindow):
         self._set_compare_snapshots([])
 
         self._render_params(self.method_keys[0])
+        self._log(f"Version: {self.version_text}")
         self._log("Welcome. Please import a CSV to view B-扫.")
 
     # --------- UI helpers ---------
@@ -2009,8 +2056,10 @@ def apply_theme(app: QApplication):
 def main():
     app = QApplication(sys.argv)
     theme_name = apply_theme(app)
-    win = GPRGuiQt()
-    win.statusBar().showMessage(f"Theme: {theme_name}")
+    version_text = build_version_string("GPR_GUI")
+    print(f"[GPR_GUI] version={version_text}")
+    win = GPRGuiQt(version_text=version_text)
+    win.statusBar().showMessage(f"Theme: {theme_name} | {version_text}")
     win.show()
     sys.exit(app.exec())
 
