@@ -1605,7 +1605,7 @@ class GPRGuiQt(QMainWindow):
             # Avoid matplotlib warning: grid kwargs are ignored when visible=False.
             ax.grid(False)
 
-    def _resolve_plot_extent(self, valid_data: np.ndarray, bounds):
+    def _resolve_plot_extent_and_labels(self, valid_data: np.ndarray, bounds):
         if self.header_info:
             total_time = float(self.header_info.get("total_time_ns", valid_data.shape[0]))
             num_traces = max(1, int(self.header_info.get("num_traces", valid_data.shape[1])))
@@ -1620,12 +1620,24 @@ class GPRGuiQt(QMainWindow):
                 time_end = bounds["time_end"]
                 dist_start = bounds["dist_start"]
                 dist_end = bounds["dist_end"]
-            return [dist_start, dist_end, time_end, time_start]
+            return {
+                "extent": [dist_start, dist_end, time_end, time_start],
+                "xlabel": "距离 (m)",
+                "ylabel": "时间 (ns)",
+            }
 
+        extent = None
         if bounds:
-            return [bounds["dist_start"], bounds["dist_end"], bounds["time_end"], bounds["time_start"]]
+            extent = [bounds["dist_start"], bounds["dist_end"], bounds["time_end"], bounds["time_start"]]
 
-        return None
+        return {
+            "extent": extent,
+            "xlabel": "距离（道索引）",
+            "ylabel": "时间（采样索引）",
+        }
+
+    def _resolve_plot_extent(self, valid_data: np.ndarray, bounds):
+        return self._resolve_plot_extent_and_labels(valid_data, bounds)["extent"]
 
     def _create_plot_axes(self, pair_count: int):
         if pair_count > 1:
@@ -1636,20 +1648,17 @@ class GPRGuiQt(QMainWindow):
         ax_left = self.fig.add_subplot(1, 1, 1)
         return [ax_left]
 
-    def _apply_axis_labels(self, ax):
-        if self.header_info:
-            ax.set_xlabel("距离 (m)")
-            ax.set_ylabel("时间 (ns)")
-        else:
-            ax.set_xlabel("距离（道索引）")
-            ax.set_ylabel("时间（采样索引）")
+    def _apply_axis_labels(self, ax, labels):
+        ax.set_xlabel(labels["xlabel"])
+        ax.set_ylabel(labels["ylabel"])
 
     def plot_data(self, data: np.ndarray):
         self.fig.clear()
         self._last_plot_signature = self._build_plot_signature()
 
         display_data, bounds = self._prepare_view_data(data)
-        extent = self._resolve_plot_extent(display_data, bounds)
+        plot_config = self._resolve_plot_extent_and_labels(display_data, bounds)
+        extent = plot_config["extent"]
         cmap = self._get_colormap()
 
         if self.cbar is not None:
@@ -1666,7 +1675,7 @@ class GPRGuiQt(QMainWindow):
         for ax, (d, title) in zip(axes, data_pairs):
             last_im, title_suffix = self._draw_image_with_colormap(ax, d, cmap, extent)
             ax.set_title(f"{title}{title_suffix}")
-            self._apply_axis_labels(ax)
+            self._apply_axis_labels(ax, plot_config)
             self._apply_axis_grid(ax)
 
         if last_im is not None:
