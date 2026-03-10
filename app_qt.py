@@ -1156,32 +1156,7 @@ class GPRGuiQt(QMainWindow):
     def _build_plot_signature(self):
         if self.data is None:
             return None
-        return (
-            self._data_revision,
-            self.method_combo.currentIndex(),
-            self.cmap_combo.currentText(),
-            self.cmap_invert_var.isChecked(),
-            self.compare_var.isChecked(),
-            self.compare_left_combo.currentIndex(),
-            self.compare_right_combo.currentIndex(),
-            self.symmetric_var.isChecked(),
-            self.chatgpt_style_var.isChecked(),
-            self.percentile_var.isChecked(),
-            self.p_low_edit.text().strip(),
-            self.p_high_edit.text().strip(),
-            self.show_cbar_var.isChecked(),
-            self.show_grid_var.isChecked(),
-            self.normalize_var.isChecked(),
-            self.demean_var.isChecked(),
-            self.crop_enable_var.isChecked(),
-            self.time_start_edit.text().strip(),
-            self.time_end_edit.text().strip(),
-            self.dist_start_edit.text().strip(),
-            self.dist_end_edit.text().strip(),
-            self.display_downsample_var.isChecked(),
-            self.display_max_samples_edit.text().strip(),
-            self.display_max_traces_edit.text().strip(),
-        )
+        return (self._data_revision,) + self._build_plot_ui_signature()
 
     def _reset_crop(self):
         self.time_start_edit.setText("")
@@ -1511,6 +1486,94 @@ class GPRGuiQt(QMainWindow):
             self._log(f"加载 CSV 失败： {e}")
 
     # --------- Plot ---------
+    def _build_plot_ui_signature(self):
+        return (
+            self.method_combo.currentIndex(),
+            self.cmap_combo.currentText(),
+            self.cmap_invert_var.isChecked(),
+            self.compare_var.isChecked(),
+            self.compare_left_combo.currentIndex(),
+            self.compare_right_combo.currentIndex(),
+            self.symmetric_var.isChecked(),
+            self.chatgpt_style_var.isChecked(),
+            self.percentile_var.isChecked(),
+            self.p_low_edit.text().strip(),
+            self.p_high_edit.text().strip(),
+            self.show_cbar_var.isChecked(),
+            self.show_grid_var.isChecked(),
+            self.normalize_var.isChecked(),
+            self.demean_var.isChecked(),
+            self.crop_enable_var.isChecked(),
+            self.time_start_edit.text().strip(),
+            self.time_end_edit.text().strip(),
+            self.dist_start_edit.text().strip(),
+            self.dist_end_edit.text().strip(),
+            self.display_downsample_var.isChecked(),
+            self.display_max_samples_edit.text().strip(),
+            self.display_max_traces_edit.text().strip(),
+        )
+
+    def _draw_image_with_colormap(self, ax, d: np.ndarray, cmap: str, extent):
+        if self.chatgpt_style_var.isChecked():
+            clipped, v = self._clip_for_display(d, clip_percent=99.0)
+            im = ax.imshow(
+                clipped,
+                cmap=cmap,
+                aspect="auto",
+                extent=extent,
+                vmin=-v,
+                vmax=v,
+                interpolation="nearest",
+                origin="upper",
+            )
+            return im, f" (clip=±{v:.3g})"
+
+        if self.symmetric_var.isChecked():
+            stdcont = np.nanmax(np.abs(d))
+            if stdcont == 0:
+                stdcont = 1e-6
+            vmin = -stdcont
+            vmax = stdcont
+            im = ax.imshow(
+                d,
+                cmap=cmap,
+                aspect="auto",
+                extent=extent,
+                vmin=vmin,
+                vmax=vmax,
+                interpolation="nearest",
+            )
+            return im, ""
+
+        perc_bounds = self._get_percentile_bounds(d)
+        if perc_bounds:
+            vmin, vmax = perc_bounds
+            im = ax.imshow(
+                d,
+                cmap=cmap,
+                aspect="auto",
+                extent=extent,
+                vmin=vmin,
+                vmax=vmax,
+                interpolation="nearest",
+            )
+            return im, ""
+
+        im = ax.imshow(d, cmap=cmap, aspect="auto", extent=extent, interpolation="nearest")
+        return im, ""
+
+    def _draw_colorbar_if_needed(self, im, axes):
+        if self.show_cbar_var.isChecked() and not self.chatgpt_style_var.isChecked():
+            self.cbar = self.fig.colorbar(im, ax=axes, fraction=0.046, pad=0.04)
+
+    def _apply_axis_grid(self, ax):
+        show_grid = self.show_grid_var.isChecked()
+        if show_grid:
+            ax.grid(True, color="#D7DEE5", alpha=0.4)
+        else:
+            # Avoid matplotlib warning: grid kwargs are ignored when visible=False.
+            ax.grid(False)
+
     def plot_data(self, data: np.ndarray):
         self.fig.clear()
         extent = None
@@ -1575,52 +1638,10 @@ class GPRGuiQt(QMainWindow):
             axes = [ax_left]
             data_pairs = [(display_data, "B-扫")]
 
+        im = None
         for ax, (d, title) in zip(axes, data_pairs):
-            if self.chatgpt_style_var.isChecked():
-                clipped, v = self._clip_for_display(d, clip_percent=99.0)
-                im = ax.imshow(
-                    clipped,
-                    cmap=cmap,
-                    aspect="auto",
-                    extent=extent,
-                    vmin=-v,
-                    vmax=v,
-                    interpolation="nearest",
-                    origin="upper",
-                )
-                ax.set_title(f"{title} (clip=±{v:.3g})")
-            else:
-                if self.symmetric_var.isChecked():
-                    stdcont = np.nanmax(np.abs(d))
-                    if stdcont == 0:
-                        stdcont = 1e-6
-                    vmin = -stdcont
-                    vmax = stdcont
-                    im = ax.imshow(
-                        d,
-                        cmap=cmap,
-                        aspect="auto",
-                        extent=extent,
-                        vmin=vmin,
-                        vmax=vmax,
-                        interpolation="nearest",
-                    )
-                else:
-                    perc_bounds = self._get_percentile_bounds(d)
-                    if perc_bounds:
-                        vmin, vmax = perc_bounds
-                        im = ax.imshow(
-                            d,
-                            cmap=cmap,
-                            aspect="auto",
-                            extent=extent,
-                            vmin=vmin,
-                            vmax=vmax,
-                            interpolation="nearest",
-                        )
-                    else:
-                        im = ax.imshow(d, cmap=cmap, aspect="auto", extent=extent, interpolation="nearest")
-                ax.set_title(title)
+            im, title_suffix = self._draw_image_with_colormap(ax, d, cmap, extent)
+            ax.set_title(f"{title}{title_suffix}")
 
             if self.header_info:
                 ax.set_xlabel("距离 (m)")
@@ -1628,10 +1649,10 @@ class GPRGuiQt(QMainWindow):
             else:
                 ax.set_xlabel("距离（道索引）")
                 ax.set_ylabel("时间（采样索引）")
-            ax.grid(self.show_grid_var.isChecked(), color="#D7DEE5", alpha=0.4)
+            self._apply_axis_grid(ax)
 
-        if self.show_cbar_var.isChecked() and not self.chatgpt_style_var.isChecked():
-            self.cbar = self.fig.colorbar(im, ax=axes, fraction=0.046, pad=0.04)
+        if im is not None:
+            self._draw_colorbar_if_needed(im, axes)
         self.canvas.draw_idle()
 
     # --------- Save outputs ---------
