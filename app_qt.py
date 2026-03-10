@@ -84,6 +84,66 @@ from read_file_data import savecsv, save_image
 _CORE_FUNC_CACHE = {}
 
 
+def _format_explainable_error(what_happened: str, possible_causes: list, next_steps: list, technical_detail: str = "") -> str:
+    lines = [
+        f"发生了什么：{what_happened}",
+        "可能原因：",
+    ]
+    for i, item in enumerate(possible_causes[:2], start=1):
+        lines.append(f"  {i}. {item}")
+    lines.append("下一步建议：")
+    for i, item in enumerate(next_steps, start=1):
+        lines.append(f"  {i}. {item}")
+    if technical_detail:
+        lines.append(f"技术详情：{technical_detail}")
+    return "\n".join(lines)
+
+
+def build_csv_load_error_message(err: Exception) -> str:
+    return _format_explainable_error(
+        what_happened="CSV 加载失败或格式不符合预期。",
+        possible_causes=[
+            "文件内容不是纯数值矩阵（包含文本、分隔符异常或空行过多）。",
+            "CSV 编码/结构异常，导致读取后数据为空或维度不正确。",
+        ],
+        next_steps=[
+            "用 Excel/文本编辑器确认分隔符与列结构一致，并另存为标准 UTF-8 CSV。",
+            "先抽取前 50 行做小样本导入，确认可读后再导入完整文件。",
+        ],
+        technical_detail=str(err),
+    )
+
+
+def build_param_error_message(label: str, raw_value: str, detail: str) -> str:
+    return _format_explainable_error(
+        what_happened=f"参数“{label}”无效。",
+        possible_causes=[
+            "输入为空，或类型与参数要求不一致（例如应为数字却输入了文本）。",
+            "参数值超出允许范围。",
+        ],
+        next_steps=[
+            "按参数提示输入有效数值，并避免空值。",
+            "若不确定，请恢复默认值后重试。",
+        ],
+        technical_detail=f"输入值={raw_value!r}；{detail}",
+    )
+
+
+def build_processing_error_message(err: Exception, method_name: str = "未知方法") -> str:
+    return _format_explainable_error(
+        what_happened=f"处理流程在“{method_name}”步骤执行失败。",
+        possible_causes=[
+            "worker 执行阶段收到非法输入或中间结果异常。",
+            "方法调用失败（依赖函数报错或输出文件未生成）。",
+        ],
+        next_steps=[
+            "先用单步处理验证该方法，再检查参数设置是否合理。",
+            "查看日志中的技术详情，必要时切换到其他方法确认数据本身是否可处理。",
+        ],
+        technical_detail=str(err),
+    )
+
+
 def _read_first_existing_text(paths):
     for path in paths:
         try:
@@ -610,10 +670,12 @@ class ProcessingWorker(QObject):
         current_data = np.array(self.base_data, copy=True)
         outputs = []
         total = len(self.tasks)
+        current_method_name = "未知方法"
         try:
             for i, task in enumerate(self.tasks, start=1):
                 method_key = task["method_key"]
                 method = task["method"]
+                current_method_name = method.get("name", method_key)
                 params = task.get("params", {})
                 out_dir = task["out_dir"]
 
@@ -671,7 +733,7 @@ class ProcessingWorker(QObject):
 
             self.finished.emit({"outputs": outputs, "final_data": current_data})
         except Exception as e:
-            self.error.emit(str(e))
+            self.error.emit(build_processing_error_message(e, current_method_name))
 
 
 _configure_matplotlib_cjk_fonts()
@@ -1441,9 +1503,14 @@ class GPRGuiQt(QMainWindow):
     def _get_params(self):
         params = {}
         for name, (edit, meta) in self.param_vars.items():
+            label = meta.get("label", name)
             raw = edit.text().strip()
             if raw == "":
-                raw = str(meta.get("default", ""))
+                default_val = meta.get("default", "")
+                if default_val in (None, ""):
+                    raise ValueError(build_param_error_message(label, raw, "参数为空且无默认值"))
+                raw = str(default_val)
+
             try:
                 if meta["type"] == "int":
                     val = int(float(raw))
@@ -1452,7 +1519,16 @@ class GPRGuiQt(QMainWindow):
                 else:
                     val = raw
             except ValueError:
-                raise ValueError(f"Invalid value for {meta['label']}")
+                raise ValueError(build_param_error_message(label, raw, "类型错误"))
+
+            min_v = meta.get("min")
+            max_v = meta.get("max")
+            if isinstance(val, (int, float)):
+                if min_v is not None and val < min_v:
+                    raise ValueError(build_param_error_message(label, raw, f"低于最小值 {min_v}"))
+                if max_v is not None and val > max_v:
+                    raise ValueError(build_param_error_message(label, raw, f"高于最大值 {max_v}"))
+
             params[name] = val
         return params
 
@@ -1486,6 +1562,9 @@ class GPRGuiQt(QMainWindow):
                 df = pd.read_csv(path, header=None, skiprows=skip_lines, na_filter=False, low_memory=False)
                 raw_data = df.values
 
+            if raw_data.size == 0:
+                raise ValueError("CSV 未读取到有效数据（空文件或分隔符不匹配）")
+
             if header_info:
                 samples = header_info["a_scan_length"]
                 traces = header_info["num_traces"]
@@ -1502,6 +1581,14 @@ class GPRGuiQt(QMainWindow):
                     data = raw_data
             else:
                 data = raw_data
+
+            try:
+                data = np.asarray(data, dtype=float)
+            except Exception as conv_err:
+                raise ValueError(f"CSV 包含非数值内容，无法转换为数值矩阵: {conv_err}")
+
+            if data.size == 0:
+                raise ValueError("CSV 数据矩阵为空")
 
             if self.fast_preview_var.isChecked():
                 data = self._downsample_data(data)
@@ -1545,8 +1632,9 @@ class GPRGuiQt(QMainWindow):
             self.plot_data(data)
 
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"加载 CSV 失败： {e}")
-            self._log(f"加载 CSV 失败： {e}")
+            friendly_msg = build_csv_load_error_message(e)
+            QMessageBox.critical(self, "错误", friendly_msg)
+            self._log(f"加载 CSV 失败：\n{friendly_msg}")
 
     # --------- Plot ---------
     def _build_plot_ui_signature(self):
