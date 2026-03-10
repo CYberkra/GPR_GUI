@@ -1,0 +1,35 @@
+{
+  "name": "gui_keypath_smoke_offscreen",
+  "pass": true,
+  "reason": "PASS",
+  "env": {
+    "python": "3.10.12",
+    "qt_qpa_platform": "offscreen",
+    "qt_backend": "PyQt6",
+    "qt_backend_version": "unknown"
+  },
+  "input": {
+    "sample": "/mnt/e/Openclaw/.openclaw/workspace/repos/GPR_GUI/sample_data/regression_v1/sample_layered_small.csv",
+    "method_key": "dewow",
+    "timeout_sec": 30.0
+  },
+  "checkpoints": {
+    "startup": true,
+    "load_sample": true,
+    "core_process_once": true,
+    "plot_refresh": true,
+    "shutdown": true
+  },
+  "metrics": {
+    "theme": "qt-material: light_blue.xml",
+    "data_shape": [
+      256,
+      80
+    ],
+    "process_status": "worker completed",
+    "plot_status": "refresh dedup skip_count 0 -> 1",
+    "plot_draw_count": 2,
+    "plot_last_ms": 11.958527960814536
+  },
+  "error": null
+}
