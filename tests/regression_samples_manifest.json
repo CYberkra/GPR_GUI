@@ -1,0 +1,35 @@
+{
+  "version": "regression-v1",
+  "created_at": "2026-03-11",
+  "notes": "Week1 Day3-Day4 baseline dataset. Prioritize in-repo reproducible samples under sample_data/regression_v1.",
+  "samples": [
+    {
+      "id": "layered_small",
+      "path": "sample_data/regression_v1/sample_layered_small.csv",
+      "source": "synthetic_reproducible(seed=20260311)",
+      "shape": [256, 80],
+      "purpose": "层状回波 + 衰减背景，验证基础去背景/归一化链路稳定性"
+    },
+    {
+      "id": "hyperbola_target",
+      "path": "sample_data/regression_v1/sample_hyperbola_target.csv",
+      "source": "synthetic_reproducible(seed=42)",
+      "shape": [320, 96],
+      "purpose": "双曲线目标特征，验证目标形态在轻处理后不塌陷"
+    },
+    {
+      "id": "clutter_spiky",
+      "path": "sample_data/regression_v1/sample_clutter_spiky.csv",
+      "source": "synthetic_reproducible(seed=7,99)",
+      "shape": [200, 72],
+      "purpose": "条纹杂波 + 稀疏脉冲噪声，验证鲁棒统计与耗时回归"
+    },
+    {
+      "id": "nan_inf_robustness",
+      "path": "sample_data/regression_v1/sample_nan_inf.csv",
+      "source": "synthetic_reproducible(seed=123)",
+      "shape": [180, 60],
+      "purpose": "含 NaN/Inf 异常值，验证清洗与输出稳定性"
+    }
+  ]
+}
