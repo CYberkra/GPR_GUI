@@ -656,6 +656,71 @@ METHOD_TAGS = {
 }
 
 
+GUI_PRESETS_V1 = {
+    "quick_preview": {
+        "label": "快速预览（速度优先）",
+        "ui": {
+            "fast_preview": True,
+            "max_samples": 256,
+            "max_traces": 120,
+            "display_downsample": True,
+            "display_max_samples": 500,
+            "display_max_traces": 260,
+            "normalize": False,
+            "demean": False,
+            "percentile": False,
+        },
+        "method_params": {
+            "set_zero_time": {"new_zero_time": 4.0},
+            "dewow": {"window": 21},
+            "fk_filter": {"angle_low": 16, "angle_high": 45, "taper_width": 3},
+            "sec_gain": {"gain_min": 1.0, "gain_max": 3.2, "power": 1.0},
+            "hankel_svd": {"window_length": 48, "rank": 1},
+        },
+    },
+    "denoise_first": {
+        "label": "降噪优先（稳健）",
+        "ui": {
+            "fast_preview": False,
+            "display_downsample": True,
+            "display_max_samples": 900,
+            "display_max_traces": 420,
+            "normalize": True,
+            "demean": True,
+            "percentile": True,
+            "p_low": 1.0,
+            "p_high": 99.0,
+        },
+        "method_params": {
+            "set_zero_time": {"new_zero_time": 5.0},
+            "dewow": {"window": 61},
+            "fk_filter": {"angle_low": 12, "angle_high": 55, "taper_width": 4},
+            "sec_gain": {"gain_min": 1.0, "gain_max": 4.2, "power": 1.2},
+            "hankel_svd": {"window_length": 96, "rank": 2},
+        },
+    },
+    "detail_first": {
+        "label": "保细节（细节优先）",
+        "ui": {
+            "fast_preview": False,
+            "display_downsample": False,
+            "normalize": False,
+            "demean": True,
+            "percentile": True,
+            "p_low": 0.5,
+            "p_high": 99.5,
+        },
+        "method_params": {
+            "set_zero_time": {"new_zero_time": 4.5},
+            "dewow": {"window": 31},
+            "fk_filter": {"angle_low": 8, "angle_high": 62, "taper_width": 2},
+            "sec_gain": {"gain_min": 1.0, "gain_max": 5.0, "power": 1.05},
+            "hankel_svd": {"window_length": 72, "rank": 3},
+        },
+    },
+}
+
+
 class ProcessingWorker(QObject):
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
@@ -768,6 +833,8 @@ class GPRGuiQt(QMainWindow):
         self._plot_skip_count = 0
         self._plot_draw_count = 0
         self._last_plot_ms = 0.0
+        self._method_param_overrides = {}
+        self._selected_preset_key = None
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -829,6 +896,21 @@ class GPRGuiQt(QMainWindow):
         self.method_keys = ordered + tail
         self.method_combo.addItems([METHOD_DISPLAY_NAMES.get(k, PROCESSING_METHODS[k]['name']) for k in self.method_keys])
         method_layout.addWidget(self.method_combo)
+
+        self.preset_combo = QComboBox()
+        for preset_key, preset in GUI_PRESETS_V1.items():
+            self.preset_combo.addItem(preset["label"], preset_key)
+        method_layout.addWidget(self.preset_combo)
+
+        preset_btn_row = QWidget()
+        preset_btn_layout = QHBoxLayout(preset_btn_row)
+        preset_btn_layout.setContentsMargins(0, 0, 0, 0)
+        self.btn_apply_preset = QPushButton("应用预设")
+        self.btn_backfill_params = QPushButton("回填当前参数")
+        preset_btn_layout.addWidget(self.btn_apply_preset)
+        preset_btn_layout.addWidget(self.btn_backfill_params)
+        method_layout.addWidget(preset_btn_row)
+
         self.param_container = QWidget()
         self.param_layout = QFormLayout(self.param_container)
         self.param_layout.setContentsMargins(4, 4, 4, 4)
@@ -1043,6 +1125,8 @@ class GPRGuiQt(QMainWindow):
         self.btn_reset_crop.clicked.connect(self._reset_crop)
 
         self.method_combo.currentIndexChanged.connect(self._on_method_change)
+        self.btn_apply_preset.clicked.connect(self.apply_selected_preset)
+        self.btn_backfill_params.clicked.connect(self.backfill_current_method_params)
         self.cmap_combo.currentIndexChanged.connect(self._refresh_plot)
         self.compare_left_combo.currentIndexChanged.connect(self._refresh_plot)
         self.compare_right_combo.currentIndexChanged.connect(self._refresh_plot)
@@ -1247,6 +1331,8 @@ class GPRGuiQt(QMainWindow):
     # --------- UI callbacks ---------
     def _on_method_change(self, idx=None):
         idx = self.method_combo.currentIndex()
+        if idx < 0:
+            return
         key = self.method_keys[idx]
         self._render_params(key)
 
@@ -1479,11 +1565,13 @@ class GPRGuiQt(QMainWindow):
             self.param_layout.removeRow(0)
         self.param_vars = {}
         params = PROCESSING_METHODS[method_key].get("params", [])
+        overrides = self._method_param_overrides.get(method_key, {})
         if not params:
             self.param_layout.addRow(QLabel("(No parameters)"))
             return
         for p in params:
-            edit = QLineEdit(str(p.get("default", "")))
+            value = overrides.get(p["name"], p.get("default", ""))
+            edit = QLineEdit(str(value))
             edit.setFixedWidth(120)
             self.param_layout.addRow(QLabel(p["label"]), edit)
             self.param_vars[p["name"]] = (edit, p)
@@ -1531,6 +1619,79 @@ class GPRGuiQt(QMainWindow):
 
             params[name] = val
         return params
+
+    def _update_current_method_overrides(self):
+        if not hasattr(self, "param_vars"):
+            return
+        idx = self.method_combo.currentIndex()
+        if idx < 0:
+            return
+        try:
+            params = self._get_params()
+        except ValueError:
+            return
+        self._method_param_overrides[self.method_keys[idx]] = params
+
+    def _resolve_method_params(self, method_key: str):
+        method = PROCESSING_METHODS[method_key]
+        defaults = {p["name"]: p.get("default") for p in method.get("params", [])}
+        overrides = self._method_param_overrides.get(method_key, {})
+        defaults.update(overrides)
+        return defaults
+
+    def _apply_preset_by_key(self, preset_key: str):
+        preset = GUI_PRESETS_V1.get(preset_key)
+        if not preset:
+            return
+        ui = preset.get("ui", {})
+        self.fast_preview_var.setChecked(bool(ui.get("fast_preview", self.fast_preview_var.isChecked())))
+        if "max_samples" in ui:
+            self.max_samples_edit.setText(str(ui["max_samples"]))
+        if "max_traces" in ui:
+            self.max_traces_edit.setText(str(ui["max_traces"]))
+        self.display_downsample_var.setChecked(bool(ui.get("display_downsample", self.display_downsample_var.isChecked())))
+        if "display_max_samples" in ui:
+            self.display_max_samples_edit.setText(str(ui["display_max_samples"]))
+        if "display_max_traces" in ui:
+            self.display_max_traces_edit.setText(str(ui["display_max_traces"]))
+        self.normalize_var.setChecked(bool(ui.get("normalize", self.normalize_var.isChecked())))
+        self.demean_var.setChecked(bool(ui.get("demean", self.demean_var.isChecked())))
+        self.percentile_var.setChecked(bool(ui.get("percentile", self.percentile_var.isChecked())))
+        if "p_low" in ui:
+            self.p_low_edit.setText(str(ui["p_low"]))
+        if "p_high" in ui:
+            self.p_high_edit.setText(str(ui["p_high"]))
+
+        for method_key, params in preset.get("method_params", {}).items():
+            self._method_param_overrides[method_key] = dict(params)
+
+        idx = self.method_combo.currentIndex()
+        if idx >= 0:
+            self._render_params(self.method_keys[idx])
+        self._selected_preset_key = preset_key
+        preset_name = preset.get("label", preset_key)
+        self._log(f"Preset applied: {preset_name}")
+        self.status_label.setText(f"已应用预设：{preset_name}")
+        self._refresh_plot()
+
+    def apply_selected_preset(self):
+        preset_key = self.preset_combo.currentData()
+        self._apply_preset_by_key(preset_key)
+
+    def backfill_current_method_params(self):
+        idx = self.method_combo.currentIndex()
+        if idx < 0:
+            return
+        method_key = self.method_keys[idx]
+        try:
+            params = self._get_params()
+        except ValueError as e:
+            QMessageBox.critical(self, "参数无效", str(e))
+            return
+        self._method_param_overrides[method_key] = params
+        self._render_params(method_key)
+        self._log(f"Backfilled current params: {METHOD_DISPLAY_NAMES.get(method_key, method_key)}")
+        self.status_label.setText("已回填当前参数到UI")
 
     # --------- Data I/O ---------
     def load_csv(self):
@@ -2086,7 +2247,7 @@ class GPRGuiQt(QMainWindow):
         for key in order:
             if key in self.method_keys:
                 method = PROCESSING_METHODS[key]
-                params = {p["name"]: p.get("default") for p in method.get("params", [])}
+                params = self._resolve_method_params(key)
                 tasks.append({
                     "method_key": key,
                     "method": method,
@@ -2114,6 +2275,7 @@ class GPRGuiQt(QMainWindow):
         except ValueError as e:
             QMessageBox.critical(self, "Invalid parameter", str(e))
             return
+        self._method_param_overrides[method_key] = dict(params)
 
         out_dir = os.path.join(BASE_DIR, "output")
         os.makedirs(out_dir, exist_ok=True)
