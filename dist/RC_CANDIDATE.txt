@@ -1,6 +1,6 @@
-RC: v0.2.0-rc1+b3dc9b7
-Commit: b3dc9b7
-GeneratedAt: 2026-03-11T01:46:00+08:00
+RC: v0.2.0-rc1+a0bb7cf
+Commit: a0bb7cf
+GeneratedAt: 2026-03-11T01:58:00+08:00
 Decision: NO-GO
-Gate: artifact-commit misaligned; missing verify log for dist/GPR_GUI_Qt.exe
-Required: rebuild windows artifact on b3dc9b7 and pass tools/preflight_check.py hard gates
+Gate: preflight passed and commit aligned; blocker remains smoke_offscreen revalidation (no PASS evidence in this rebuild round)
+Artifacts: dist/GPR_GUI_Qt_win_20260311_a0bb7cf.exe ; dist/GPR_GUI_Qt_win_20260311_a0bb7cf_pe_verify.txt
