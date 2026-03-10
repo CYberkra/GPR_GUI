@@ -833,6 +833,8 @@ class GPRGuiQt(QMainWindow):
         self._plot_skip_count = 0
         self._plot_draw_count = 0
         self._last_plot_ms = 0.0
+        self._last_prepare_ms = None
+        self._last_compare_ms = None
         self._method_param_overrides = {}
         self._selected_preset_key = None
 
@@ -1111,6 +1113,33 @@ class GPRGuiQt(QMainWindow):
         self.ax.set_xlabel("距离（道索引）")
         self.ax.set_ylabel("时间（采样索引）")
         self.canvas = FigureCanvas(self.fig)
+
+        self.observability_box = QGroupBox("📈 可观测性")
+        self.observability_box.setCheckable(True)
+        self.observability_box.setChecked(False)
+        observability_layout = QVBoxLayout(self.observability_box)
+        observability_layout.setContentsMargins(8, 6, 8, 6)
+        observability_body = QWidget()
+        observability_body_layout = QVBoxLayout(observability_body)
+        observability_body_layout.setContentsMargins(0, 0, 0, 0)
+        observability_body_layout.setSpacing(2)
+        self.obs_last_plot_label = QLabel("最近绘制耗时：--")
+        self.obs_draw_count_label = QLabel("累计绘制次数：0")
+        self.obs_skip_count_label = QLabel("累计跳过重绘：0")
+        self.obs_last_prepare_label = QLabel("最近预处理耗时：--")
+        for label in [
+            self.obs_last_plot_label,
+            self.obs_draw_count_label,
+            self.obs_skip_count_label,
+            self.obs_last_prepare_label,
+        ]:
+            label.setStyleSheet("color:#4A5568;")
+            observability_body_layout.addWidget(label)
+        observability_layout.addWidget(observability_body)
+        self.observability_box.toggled.connect(observability_body.setVisible)
+        observability_body.setVisible(False)
+        right_layout.addWidget(self.observability_box)
+
         right_layout.addWidget(self.canvas, 1)
 
         # ---- Signals ----
@@ -1143,6 +1172,7 @@ class GPRGuiQt(QMainWindow):
         self._set_compare_snapshots([])
 
         self._render_params(self.method_keys[0])
+        self._refresh_observability_panel()
         self._log(f"Version: {self.version_text}")
         self._log("Welcome. Please import a CSV to view B-扫.")
 
@@ -1348,6 +1378,8 @@ class GPRGuiQt(QMainWindow):
         signature = self._build_plot_signature()
         if signature == self._last_plot_signature:
             self._plot_skip_count += 1
+            if hasattr(self, "_refresh_observability_panel"):
+                self._refresh_observability_panel()
             self._log_plot_debug(f"skip redraw: count={self._plot_skip_count}")
             return
         self.plot_data(self.data)
@@ -1363,6 +1395,23 @@ class GPRGuiQt(QMainWindow):
     def _log_plot_debug(self, message: str):
         if self._plot_debug_metrics:
             self._log(f"[plot-debug] {message}")
+
+    def _refresh_observability_panel(self):
+        if not hasattr(self, "obs_last_plot_label"):
+            return
+        self.obs_last_plot_label.setText(f"最近绘制耗时：{GPRGuiQt._format_metric_ms(self._last_plot_ms)}")
+        self.obs_draw_count_label.setText(f"累计绘制次数：{int(self._plot_draw_count)}")
+        self.obs_skip_count_label.setText(f"累计跳过重绘：{int(self._plot_skip_count)}")
+        self.obs_last_prepare_label.setText(f"最近预处理耗时：{GPRGuiQt._format_metric_ms(self._last_prepare_ms)}")
+
+    @staticmethod
+    def _format_metric_ms(value):
+        if value is None:
+            return "--"
+        try:
+            return f"{float(value):.2f} ms"
+        except Exception:
+            return "--"
 
     def _reset_crop(self):
         self.time_start_edit.setText("")
@@ -1554,6 +1603,9 @@ class GPRGuiQt(QMainWindow):
         cropped_data, bounds = self._apply_crop(valid_data)
         display_data = self._downsample_for_display(cropped_data)
         prepare_elapsed_ms = (time.perf_counter() - prepare_start_ts) * 1000.0
+        self._last_prepare_ms = prepare_elapsed_ms
+        if hasattr(self, "_refresh_observability_panel"):
+            self._refresh_observability_panel()
         self._log_plot_debug(
             f"prepare view: {prepare_elapsed_ms:.2f} ms, shape={display_data.shape[0]}x{display_data.shape[1]}"
         )
@@ -1974,6 +2026,7 @@ class GPRGuiQt(QMainWindow):
             self._apply_axis_grid(ax)
         if compare_start_ts is not None:
             compare_elapsed_ms = (time.perf_counter() - compare_start_ts) * 1000.0
+            self._last_compare_ms = compare_elapsed_ms
             self._log_plot_debug(f"compare render: {compare_elapsed_ms:.2f} ms, panels={len(data_pairs)}")
         return last_im
 
@@ -2005,6 +2058,8 @@ class GPRGuiQt(QMainWindow):
         elapsed_ms = (time.perf_counter() - start_ts) * 1000.0
         self._plot_draw_count += 1
         self._last_plot_ms = elapsed_ms
+        if hasattr(self, "_refresh_observability_panel"):
+            self._refresh_observability_panel()
         self._log_plot_debug(
             f"draw#{self._plot_draw_count}: {elapsed_ms:.2f} ms, skipped={self._plot_skip_count}"
         )
