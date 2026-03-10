@@ -1,0 +1,19 @@
+# Python cache/artifacts
+__pycache__/
+*.py[cod]
+
+# Local virtual environments
+.venv/
+.venv_winbuild/
+
+# Local build/output artifacts
+build/
+dist/
+output/
+
+# Local quarantine archive
+.local_quarantine/
+
+# Logs
+*.log
+logs/
