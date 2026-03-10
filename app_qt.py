@@ -1552,17 +1552,20 @@ class GPRGuiQt(QMainWindow):
             perc_bounds = None
 
         if perc_bounds:
-            vmin, vmax = perc_bounds
-            im = ax.imshow(
-                d,
-                cmap=cmap,
-                aspect="auto",
-                extent=extent,
-                vmin=vmin,
-                vmax=vmax,
-                interpolation="nearest",
-            )
-            return im, ""
+            try:
+                vmin, vmax = perc_bounds
+                im = ax.imshow(
+                    d,
+                    cmap=cmap,
+                    aspect="auto",
+                    extent=extent,
+                    vmin=vmin,
+                    vmax=vmax,
+                    interpolation="nearest",
+                )
+                return im, ""
+            except Exception:
+                pass
 
         im = ax.imshow(d, cmap=cmap, aspect="auto", extent=extent, interpolation="nearest")
         return im, ""
@@ -1659,15 +1662,15 @@ class GPRGuiQt(QMainWindow):
         data_pairs = self._build_compare_data_pairs(display_data)
         axes = self._create_plot_axes(len(data_pairs))
 
-        im = None
+        last_im = None
         for ax, (d, title) in zip(axes, data_pairs):
-            im, title_suffix = self._draw_image_with_colormap(ax, d, cmap, extent)
+            last_im, title_suffix = self._draw_image_with_colormap(ax, d, cmap, extent)
             ax.set_title(f"{title}{title_suffix}")
             self._apply_axis_labels(ax)
             self._apply_axis_grid(ax)
 
-        if im is not None:
-            self._draw_colorbar_if_needed(im, axes)
+        if last_im is not None:
+            self._draw_colorbar_if_needed(last_im, axes)
         self.canvas.draw_idle()
 
     # --------- Save outputs ---------
