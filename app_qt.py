@@ -1354,9 +1354,14 @@ class GPRGuiQt(QMainWindow):
         return data[t_idx, :][:, d_idx]
 
     def _prepare_view_data(self, data: np.ndarray):
+        prepare_start_ts = time.perf_counter()
         valid_data = self._apply_preprocess(np.nan_to_num(data))
         cropped_data, bounds = self._apply_crop(valid_data)
         display_data = self._downsample_for_display(cropped_data)
+        prepare_elapsed_ms = (time.perf_counter() - prepare_start_ts) * 1000.0
+        self._log_plot_debug(
+            f"prepare view: {prepare_elapsed_ms:.2f} ms, shape={display_data.shape[0]}x{display_data.shape[1]}"
+        )
         return display_data, bounds
 
     # --------- Params rendering ---------
@@ -1664,12 +1669,16 @@ class GPRGuiQt(QMainWindow):
         ax.set_ylabel(labels["ylabel"])
 
     def _render_data_pairs(self, axes, data_pairs, cmap, extent, plot_config):
+        compare_start_ts = time.perf_counter() if len(data_pairs) > 1 else None
         last_im = None
         for ax, (d, title) in zip(axes, data_pairs):
             last_im, title_suffix = self._draw_image_with_colormap(ax, d, cmap, extent)
             ax.set_title(f"{title}{title_suffix}")
             self._apply_axis_labels(ax, plot_config)
             self._apply_axis_grid(ax)
+        if compare_start_ts is not None:
+            compare_elapsed_ms = (time.perf_counter() - compare_start_ts) * 1000.0
+            self._log_plot_debug(f"compare render: {compare_elapsed_ms:.2f} ms, panels={len(data_pairs)}")
         return last_im
 
     def plot_data(self, data: np.ndarray):
