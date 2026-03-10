@@ -25,16 +25,19 @@ class _BoolVar:
 
 
 class _DummyGui:
-    def __init__(self, *, chatgpt=False, symmetric=False, perc_bounds=None):
+    def __init__(self, *, chatgpt=False, symmetric=False, perc_bounds=None, perc_error=False):
         self.chatgpt_style_var = _BoolVar(chatgpt)
         self.symmetric_var = _BoolVar(symmetric)
         self._perc_bounds = perc_bounds
+        self._perc_error = perc_error
 
     def _clip_for_display(self, data, clip_percent=99.0):
         # Deterministic clipped output for assertion.
         return data * 0.5, 2.5
 
     def _get_percentile_bounds(self, _data):
+        if self._perc_error:
+            raise RuntimeError("percentile failure")
         return self._perc_bounds
 
 
@@ -70,10 +73,31 @@ def test_percentile_branch():
     assert im.get_clim() == (-1.0, 3.0)
 
 
+def test_percentile_none_fallback_branch():
+    gui = _DummyGui(chatgpt=False, symmetric=False, perc_bounds=None)
+    ax = _new_ax()
+    data = np.array([[1.0, -3.0], [2.0, 4.0]])
+    im, suffix = GPRGuiQt._draw_image_with_colormap(gui, ax, data, "cividis", None)
+    assert suffix == ""
+    # Default imshow clim for this input becomes data min/max.
+    assert im.get_clim() == (-3.0, 4.0)
+
+
+def test_percentile_exception_fallback_branch():
+    gui = _DummyGui(chatgpt=False, symmetric=False, perc_bounds=None, perc_error=True)
+    ax = _new_ax()
+    data = np.array([[1.0, -3.0], [2.0, 4.0]])
+    im, suffix = GPRGuiQt._draw_image_with_colormap(gui, ax, data, "plasma", None)
+    assert suffix == ""
+    assert im.get_clim() == (-3.0, 4.0)
+
+
 def main():
     test_chatgpt_style_branch()
     test_symmetric_branch()
     test_percentile_branch()
+    test_percentile_none_fallback_branch()
+    test_percentile_exception_fallback_branch()
     print("OK: _draw_image_with_colormap branch tests passed")
 
 
