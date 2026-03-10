@@ -13,6 +13,7 @@ GPR GUI (PyQt6 + themed)
 import os
 import sys
 import re
+import time
 from datetime import datetime
 
 import numpy as np
@@ -658,6 +659,10 @@ class GPRGuiQt(QMainWindow):
         self._compare_syncing = False
         self._data_revision = 0
         self._last_plot_signature = None
+        self._plot_debug_metrics = os.getenv("GPR_GUI_PLOT_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+        self._plot_skip_count = 0
+        self._plot_draw_count = 0
+        self._last_plot_ms = 0.0
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -1147,6 +1152,8 @@ class GPRGuiQt(QMainWindow):
             return
         signature = self._build_plot_signature()
         if signature == self._last_plot_signature:
+            self._plot_skip_count += 1
+            self._log_plot_debug(f"skip redraw: count={self._plot_skip_count}")
             return
         self.plot_data(self.data)
 
@@ -1157,6 +1164,10 @@ class GPRGuiQt(QMainWindow):
         if self.data is None:
             return None
         return (self._data_revision,) + self._build_plot_ui_signature()
+
+    def _log_plot_debug(self, message: str):
+        if self._plot_debug_metrics:
+            self._log(f"[plot-debug] {message}")
 
     def _reset_crop(self):
         self.time_start_edit.setText("")
@@ -1653,6 +1664,7 @@ class GPRGuiQt(QMainWindow):
         ax.set_ylabel(labels["ylabel"])
 
     def plot_data(self, data: np.ndarray):
+        start_ts = time.perf_counter()
         self.fig.clear()
         self._last_plot_signature = self._build_plot_signature()
 
@@ -1681,6 +1693,13 @@ class GPRGuiQt(QMainWindow):
         if last_im is not None:
             self._draw_colorbar_if_needed(last_im, axes)
         self.canvas.draw_idle()
+
+        elapsed_ms = (time.perf_counter() - start_ts) * 1000.0
+        self._plot_draw_count += 1
+        self._last_plot_ms = elapsed_ms
+        self._log_plot_debug(
+            f"draw#{self._plot_draw_count}: {elapsed_ms:.2f} ms, skipped={self._plot_skip_count}"
+        )
 
     # --------- Save outputs ---------
     def _save_outputs(self, data: np.ndarray, method_key: str):
