@@ -1566,6 +1566,29 @@ class GPRGuiQt(QMainWindow):
         if self.show_cbar_var.isChecked() and not self.chatgpt_style_var.isChecked():
             self.cbar = self.fig.colorbar(im, ax=axes, fraction=0.046, pad=0.04)
 
+    def _build_compare_data_pairs(self, display_data: np.ndarray):
+        if self.compare_var.isChecked() and len(self.compare_snapshots) >= 1:
+            left_idx = self.compare_left_combo.currentIndex()
+            right_idx = self.compare_right_combo.currentIndex()
+            if left_idx < 0:
+                left_idx = 0
+            if right_idx < 0:
+                right_idx = 0
+            left_idx = min(left_idx, len(self.compare_snapshots) - 1)
+            right_idx = min(right_idx, len(self.compare_snapshots) - 1)
+            pair_indices = [left_idx, right_idx]
+            if len(self.compare_snapshots) == 1:
+                pair_indices = [0, 0]
+
+            data_pairs = []
+            for idx in pair_indices:
+                snap = self.compare_snapshots[idx]
+                snap_data, _ = self._prepare_view_data(snap["data"])
+                data_pairs.append((snap_data, snap["label"]))
+            return data_pairs
+
+        return [(display_data, "B-扫")]
+
     def _apply_axis_grid(self, ax):
         show_grid = self.show_grid_var.isChecked()
         if show_grid:
@@ -1612,31 +1635,14 @@ class GPRGuiQt(QMainWindow):
                 pass
             self.cbar = None
 
-        if self.compare_var.isChecked() and len(self.compare_snapshots) >= 1:
-            left_idx = self.compare_left_combo.currentIndex()
-            right_idx = self.compare_right_combo.currentIndex()
-            if left_idx < 0:
-                left_idx = 0
-            if right_idx < 0:
-                right_idx = 0
-            left_idx = min(left_idx, len(self.compare_snapshots) - 1)
-            right_idx = min(right_idx, len(self.compare_snapshots) - 1)
-            pair_indices = [left_idx, right_idx]
-            if len(self.compare_snapshots) == 1:
-                pair_indices = [0, 0]
-
+        data_pairs = self._build_compare_data_pairs(display_data)
+        if len(data_pairs) > 1:
             ax_top = self.fig.add_subplot(2, 1, 1)
             ax_bottom = self.fig.add_subplot(2, 1, 2)
             axes = [ax_top, ax_bottom]
-            data_pairs = []
-            for idx in pair_indices:
-                snap = self.compare_snapshots[idx]
-                snap_data, _ = self._prepare_view_data(snap["data"])
-                data_pairs.append((snap_data, snap["label"]))
         else:
             ax_left = self.fig.add_subplot(1, 1, 1)
             axes = [ax_left]
-            data_pairs = [(display_data, "B-扫")]
 
         im = None
         for ax, (d, title) in zip(axes, data_pairs):
