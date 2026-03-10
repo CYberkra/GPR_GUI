@@ -1,0 +1,169 @@
+{
+  "version": "regression-baseline-v1",
+  "generated_at": "2026-03-11T01:43:21",
+  "repo_commit": "cac09fd",
+  "manifest": "tests/regression_samples_manifest.json",
+  "sample_count": 4,
+  "total_elapsed_ms": 129.797,
+  "samples": [
+    {
+      "id": "layered_small",
+      "path": "sample_data/regression_v1/sample_layered_small.csv",
+      "source": "synthetic_reproducible(seed=20260311)",
+      "purpose": "层状回波 + 衰减背景，验证基础去背景/归一化链路稳定性",
+      "input_shape": [
+        256,
+        80
+      ],
+      "output_shape": [
+        256,
+        80
+      ],
+      "non_finite_input_count": 0,
+      "elapsed_ms": 0.943,
+      "input_stats": {
+        "min": -0.6057322662105734,
+        "max": 0.7398542432899302,
+        "mean": 0.011826826811621463,
+        "std": 0.16497055067983404,
+        "abs_mean": 0.11044099386718545,
+        "p01": -0.4450620109386354,
+        "p99": 0.5690811989526993
+      },
+      "output_stats": {
+        "min": -0.9859337698814817,
+        "max": 1.0,
+        "mean": -6.4184768611141866e-18,
+        "std": 0.24993050657859425,
+        "abs_mean": 0.19389100516639085,
+        "p01": -0.6288432837729601,
+        "p99": 0.6241316622686394
+      }
+    },
+    {
+      "id": "hyperbola_target",
+      "path": "sample_data/regression_v1/sample_hyperbola_target.csv",
+      "source": "synthetic_reproducible(seed=42)",
+      "purpose": "双曲线目标特征，验证目标形态在轻处理后不塌陷",
+      "input_shape": [
+        320,
+        96
+      ],
+      "output_shape": [
+        320,
+        96
+      ],
+      "non_finite_input_count": 0,
+      "elapsed_ms": 0.346,
+      "input_stats": {
+        "min": -0.5202610354062278,
+        "max": 1.4088727889127997,
+        "mean": 0.03524290692417395,
+        "std": 0.275158803523629,
+        "abs_mean": 0.2376123416065871,
+        "p01": -0.41075781622784935,
+        "p99": 0.733726378455881
+      },
+      "output_stats": {
+        "min": -0.26834011964826104,
+        "max": 1.0,
+        "mean": 3.3949080525952358e-18,
+        "std": 0.10686859858615053,
+        "abs_mean": 0.06137260923025589,
+        "p01": -0.16445648351576841,
+        "p99": 0.575106755451998
+      }
+    },
+    {
+      "id": "clutter_spiky",
+      "path": "sample_data/regression_v1/sample_clutter_spiky.csv",
+      "source": "synthetic_reproducible(seed=7,99)",
+      "purpose": "条纹杂波 + 稀疏脉冲噪声，验证鲁棒统计与耗时回归",
+      "input_shape": [
+        200,
+        72
+      ],
+      "output_shape": [
+        200,
+        72
+      ],
+      "non_finite_input_count": 0,
+      "elapsed_ms": 0.201,
+      "input_stats": {
+        "min": -4.529932419215739,
+        "max": 3.233527885239943,
+        "mean": -0.0014778202186654622,
+        "std": 0.3486727170205301,
+        "abs_mean": 0.2809864630957441,
+        "p01": -0.6395956173533094,
+        "p99": 0.6390827381089961
+      },
+      "output_stats": {
+        "min": -1.0,
+        "max": 0.5548826674345194,
+        "mean": -4.1344242844113904e-19,
+        "std": 0.026924825028927943,
+        "abs_mean": 0.01220641931457152,
+        "p01": -0.036566902068073594,
+        "p99": 0.0366911907656148
+      }
+    },
+    {
+      "id": "nan_inf_robustness",
+      "path": "sample_data/regression_v1/sample_nan_inf.csv",
+      "source": "synthetic_reproducible(seed=123)",
+      "purpose": "含 NaN/Inf 异常值，验证清洗与输出稳定性",
+      "input_shape": [
+        180,
+        60
+      ],
+      "output_shape": [
+        180,
+        60
+      ],
+      "non_finite_input_count": 7,
+      "elapsed_ms": 0.197,
+      "input_stats": {
+        "min": -0.47798242828865584,
+        "max": 0.9828757184112769,
+        "mean": 0.2509216577451338,
+        "std": 0.20832070931946017,
+        "abs_mean": 0.27354588703032656,
+        "p01": -0.22400563905935217,
+        "p99": 0.7150565080867171
+      },
+      "output_stats": {
+        "min": -1.0,
+        "max": 0.9014891698266664,
+        "mean": 9.56025382316107e-19,
+        "std": 0.19890649788952278,
+        "abs_mean": 0.15489244515822193,
+        "p01": -0.4873734345979574,
+        "p99": 0.4843017852054448
+      }
+    }
+  ],
+  "compare_with": "reports/regression_baseline_v1.json",
+  "deltas": {
+    "layered_small": {
+      "elapsed_ms_delta": 0.621,
+      "output_mean_delta": 0.0,
+      "output_std_delta": 0.0
+    },
+    "hyperbola_target": {
+      "elapsed_ms_delta": -0.041,
+      "output_mean_delta": 0.0,
+      "output_std_delta": 0.0
+    },
+    "clutter_spiky": {
+      "elapsed_ms_delta": 0.005,
+      "output_mean_delta": 0.0,
+      "output_std_delta": 0.0
+    },
+    "nan_inf_robustness": {
+      "elapsed_ms_delta": 0.065,
+      "output_mean_delta": 0.0,
+      "output_std_delta": 0.0
+    }
+  }
+}

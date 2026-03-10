@@ -1586,7 +1586,7 @@ class GPRGuiQt(QMainWindow):
         max_traces = self._parse_int_edit(self.max_traces_edit, default=0)
         n_time, n_dist = data.shape
         t_idx, d_idx = self._get_downsample_indices(n_time, n_dist, max_samples, max_traces)
-        return data[t_idx, :][:, d_idx]
+        return data[np.ix_(t_idx, d_idx)]
 
     def _downsample_for_display(self, data: np.ndarray) -> np.ndarray:
         if not self.display_downsample_var.isChecked():
@@ -1595,11 +1595,16 @@ class GPRGuiQt(QMainWindow):
         max_traces = self._parse_int_edit(self.display_max_traces_edit, default=0)
         n_time, n_dist = data.shape
         t_idx, d_idx = self._get_downsample_indices(n_time, n_dist, max_samples, max_traces)
-        return data[t_idx, :][:, d_idx]
+        return data[np.ix_(t_idx, d_idx)]
 
     def _prepare_view_data(self, data: np.ndarray):
         prepare_start_ts = time.perf_counter()
-        valid_data = self._apply_preprocess(np.nan_to_num(data))
+        arr = np.asarray(data)
+        if np.isfinite(arr).all():
+            safe_data = arr
+        else:
+            safe_data = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+        valid_data = self._apply_preprocess(safe_data)
         cropped_data, bounds = self._apply_crop(valid_data)
         display_data = self._downsample_for_display(cropped_data)
         prepare_elapsed_ms = (time.perf_counter() - prepare_start_ts) * 1000.0
@@ -1764,7 +1769,14 @@ class GPRGuiQt(QMainWindow):
                     target_rows = max_samples * max_traces
                 rows = []
                 count = 0
-                for chunk in pd.read_csv(path, header=None, skiprows=skip_lines, chunksize=200000):
+                for chunk in pd.read_csv(
+                    path,
+                    header=None,
+                    skiprows=skip_lines,
+                    chunksize=200000,
+                    na_filter=False,
+                    low_memory=False,
+                ):
                     rows.append(chunk)
                     count += len(chunk)
                     if count >= target_rows:
