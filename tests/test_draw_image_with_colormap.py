@@ -92,12 +92,22 @@ def test_percentile_exception_fallback_branch():
     assert im.get_clim() == (-3.0, 4.0)
 
 
+def test_percentile_invalid_bounds_fallback_branch():
+    gui = _DummyGui(chatgpt=False, symmetric=False, perc_bounds=(1.0,), perc_error=False)
+    ax = _new_ax()
+    data = np.array([[1.0, -3.0], [2.0, 4.0]])
+    im, suffix = GPRGuiQt._draw_image_with_colormap(gui, ax, data, "inferno", None)
+    assert suffix == ""
+    assert im.get_clim() == (-3.0, 4.0)
+
+
 def main():
     test_chatgpt_style_branch()
     test_symmetric_branch()
     test_percentile_branch()
     test_percentile_none_fallback_branch()
     test_percentile_exception_fallback_branch()
+    test_percentile_invalid_bounds_fallback_branch()
     print("OK: _draw_image_with_colormap branch tests passed")
 
 
