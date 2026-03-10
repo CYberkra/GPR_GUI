@@ -29,7 +29,7 @@ from scipy.ndimage import uniform_filter1d
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
 from scipy.interpolate import interp1d
 
-from PyQt6.QtCore import Qt, QObject, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QObject, QThread, QTimer, QSignalBlocker, pyqtSignal
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QApplication,
@@ -656,6 +656,8 @@ class GPRGuiQt(QMainWindow):
         self._ds_cache = {}
         self.compare_snapshots = []
         self._compare_syncing = False
+        self._data_revision = 0
+        self._last_plot_signature = None
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -1067,6 +1069,7 @@ class GPRGuiQt(QMainWindow):
             QMessageBox.information(self, "撤销", "无可恢复的历史状态。")
             return
         self.data = self.history.pop()
+        self._mark_data_changed()
         self._update_current_compare_snapshot()
         self.plot_data(self.data)
         self._log("撤销: restored previous state.")
@@ -1077,6 +1080,7 @@ class GPRGuiQt(QMainWindow):
             return
         self._push_history()
         self.data = self.original_data.copy()
+        self._mark_data_changed()
         self._set_compare_snapshots([
             {"label": "原始", "data": self.original_data},
             {"label": "当前", "data": self.data},
@@ -1102,15 +1106,16 @@ class GPRGuiQt(QMainWindow):
 
         self._compare_syncing = True
         try:
-            self.compare_left_combo.clear()
-            self.compare_right_combo.clear()
-            for s in self.compare_snapshots:
-                self.compare_left_combo.addItem(s["label"])
-                self.compare_right_combo.addItem(s["label"])
-            if self.compare_snapshots:
-                self.compare_left_combo.setCurrentIndex(0)
-                right_idx = 1 if len(self.compare_snapshots) > 1 else 0
-                self.compare_right_combo.setCurrentIndex(right_idx)
+            with QSignalBlocker(self.compare_left_combo), QSignalBlocker(self.compare_right_combo):
+                self.compare_left_combo.clear()
+                self.compare_right_combo.clear()
+                for s in self.compare_snapshots:
+                    self.compare_left_combo.addItem(s["label"])
+                    self.compare_right_combo.addItem(s["label"])
+                if self.compare_snapshots:
+                    self.compare_left_combo.setCurrentIndex(0)
+                    right_idx = 1 if len(self.compare_snapshots) > 1 else 0
+                    self.compare_right_combo.setCurrentIndex(right_idx)
         finally:
             self._compare_syncing = False
 
@@ -1132,14 +1137,51 @@ class GPRGuiQt(QMainWindow):
         self._render_params(key)
 
     def _refresh_plot(self):
-        if self.data is None:
+        if self.data is None or self._compare_syncing:
             return
         # debounce frequent UI-triggered redraws
         self._plot_timer.start(30)
 
     def _do_refresh_plot(self):
-        if self.data is not None:
-            self.plot_data(self.data)
+        if self.data is None:
+            return
+        signature = self._build_plot_signature()
+        if signature == self._last_plot_signature:
+            return
+        self.plot_data(self.data)
+
+    def _mark_data_changed(self):
+        self._data_revision += 1
+
+    def _build_plot_signature(self):
+        if self.data is None:
+            return None
+        return (
+            self._data_revision,
+            self.method_combo.currentIndex(),
+            self.cmap_combo.currentText(),
+            self.cmap_invert_var.isChecked(),
+            self.compare_var.isChecked(),
+            self.compare_left_combo.currentIndex(),
+            self.compare_right_combo.currentIndex(),
+            self.symmetric_var.isChecked(),
+            self.chatgpt_style_var.isChecked(),
+            self.percentile_var.isChecked(),
+            self.p_low_edit.text().strip(),
+            self.p_high_edit.text().strip(),
+            self.show_cbar_var.isChecked(),
+            self.show_grid_var.isChecked(),
+            self.normalize_var.isChecked(),
+            self.demean_var.isChecked(),
+            self.crop_enable_var.isChecked(),
+            self.time_start_edit.text().strip(),
+            self.time_end_edit.text().strip(),
+            self.dist_start_edit.text().strip(),
+            self.dist_end_edit.text().strip(),
+            self.display_downsample_var.isChecked(),
+            self.display_max_samples_edit.text().strip(),
+            self.display_max_traces_edit.text().strip(),
+        )
 
     def _reset_crop(self):
         self.time_start_edit.setText("")
@@ -1287,6 +1329,15 @@ class GPRGuiQt(QMainWindow):
         cropped = data[t0:t1 + 1, d0:d1 + 1]
         return cropped, bounds
 
+    def _parse_int_edit(self, edit: QLineEdit, default: int = 0) -> int:
+        text = (edit.text() or "").strip()
+        if text == "":
+            return default
+        try:
+            return int(float(text))
+        except Exception:
+            return default
+
     def _get_downsample_indices(self, n_time: int, n_dist: int, max_samples: int, max_traces: int):
         key = (n_time, n_dist, max_samples, max_traces)
         if key in self._ds_cache:
@@ -1301,11 +1352,8 @@ class GPRGuiQt(QMainWindow):
     def _downsample_data(self, data: np.ndarray) -> np.ndarray:
         if not self.fast_preview_var.isChecked():
             return data
-        try:
-            max_samples = int(float(self.max_samples_edit.text() or 0))
-            max_traces = int(float(self.max_traces_edit.text() or 0))
-        except Exception:
-            return data
+        max_samples = self._parse_int_edit(self.max_samples_edit, default=0)
+        max_traces = self._parse_int_edit(self.max_traces_edit, default=0)
         n_time, n_dist = data.shape
         t_idx, d_idx = self._get_downsample_indices(n_time, n_dist, max_samples, max_traces)
         return data[t_idx, :][:, d_idx]
@@ -1313,14 +1361,17 @@ class GPRGuiQt(QMainWindow):
     def _downsample_for_display(self, data: np.ndarray) -> np.ndarray:
         if not self.display_downsample_var.isChecked():
             return data
-        try:
-            max_samples = int(float(self.display_max_samples_edit.text() or 0))
-            max_traces = int(float(self.display_max_traces_edit.text() or 0))
-        except Exception:
-            return data
+        max_samples = self._parse_int_edit(self.display_max_samples_edit, default=0)
+        max_traces = self._parse_int_edit(self.display_max_traces_edit, default=0)
         n_time, n_dist = data.shape
         t_idx, d_idx = self._get_downsample_indices(n_time, n_dist, max_samples, max_traces)
         return data[t_idx, :][:, d_idx]
+
+    def _prepare_view_data(self, data: np.ndarray):
+        valid_data = self._apply_preprocess(np.nan_to_num(data))
+        cropped_data, bounds = self._apply_crop(valid_data)
+        display_data = self._downsample_for_display(cropped_data)
+        return display_data, bounds
 
     # --------- Params rendering ---------
     def _render_params(self, method_key: str):
@@ -1379,11 +1430,8 @@ class GPRGuiQt(QMainWindow):
             skip_lines = _detect_skiprows(path)
 
             if self.fast_preview_var.isChecked():
-                try:
-                    max_samples = int(float(self.max_samples_edit.text() or 0))
-                    max_traces = int(float(self.max_traces_edit.text() or 0))
-                except Exception:
-                    max_samples, max_traces = 0, 0
+                max_samples = self._parse_int_edit(self.max_samples_edit, default=0)
+                max_traces = self._parse_int_edit(self.max_traces_edit, default=0)
                 target_rows = max_samples if max_samples > 0 else 200000
                 if header_info and max_samples > 0 and max_traces > 0:
                     target_rows = max_samples * max_traces
@@ -1432,6 +1480,7 @@ class GPRGuiQt(QMainWindow):
             self.header_info = header_info
             self.original_data = data.copy()
             self.history = []
+            self._mark_data_changed()
             self._set_compare_snapshots([
                 {"label": "原始", "data": self.original_data},
                 {"label": "当前", "data": self.data},
@@ -1465,11 +1514,10 @@ class GPRGuiQt(QMainWindow):
     def plot_data(self, data: np.ndarray):
         self.fig.clear()
         extent = None
+        self._last_plot_signature = self._build_plot_signature()
 
-        valid_data = np.nan_to_num(data)
-        valid_data = self._apply_preprocess(valid_data)
-        valid_data, bounds = self._apply_crop(valid_data)
-        display_data = self._downsample_for_display(valid_data)
+        display_data, bounds = self._prepare_view_data(data)
+        valid_data = display_data
 
         if self.header_info:
             total_time = float(self.header_info.get("total_time_ns", valid_data.shape[0]))
@@ -1520,9 +1568,7 @@ class GPRGuiQt(QMainWindow):
             data_pairs = []
             for idx in pair_indices:
                 snap = self.compare_snapshots[idx]
-                snap_data = self._apply_preprocess(np.nan_to_num(snap["data"]))
-                snap_data, _ = self._apply_crop(snap_data)
-                snap_data = self._downsample_for_display(snap_data)
+                snap_data, _ = self._prepare_view_data(snap["data"])
                 data_pairs.append((snap_data, snap["label"]))
         else:
             ax_left = self.fig.add_subplot(1, 1, 1)
@@ -1767,6 +1813,7 @@ class GPRGuiQt(QMainWindow):
         final_data = payload.get("final_data")
         if final_data is not None:
             self.data = final_data
+            self._mark_data_changed()
 
         compare_snapshots = []
         if self.original_data is not None:
