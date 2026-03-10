@@ -1545,7 +1545,12 @@ class GPRGuiQt(QMainWindow):
             )
             return im, ""
 
-        perc_bounds = self._get_percentile_bounds(d)
+        perc_bounds = None
+        try:
+            perc_bounds = self._get_percentile_bounds(d)
+        except Exception:
+            perc_bounds = None
+
         if perc_bounds:
             vmin, vmax = perc_bounds
             im = ax.imshow(
@@ -1597,14 +1602,7 @@ class GPRGuiQt(QMainWindow):
             # Avoid matplotlib warning: grid kwargs are ignored when visible=False.
             ax.grid(False)
 
-    def plot_data(self, data: np.ndarray):
-        self.fig.clear()
-        extent = None
-        self._last_plot_signature = self._build_plot_signature()
-
-        display_data, bounds = self._prepare_view_data(data)
-        valid_data = display_data
-
+    def _resolve_plot_extent(self, valid_data: np.ndarray, bounds):
         if self.header_info:
             total_time = float(self.header_info.get("total_time_ns", valid_data.shape[0]))
             num_traces = max(1, int(self.header_info.get("num_traces", valid_data.shape[1])))
@@ -1619,13 +1617,36 @@ class GPRGuiQt(QMainWindow):
                 time_end = bounds["time_end"]
                 dist_start = bounds["dist_start"]
                 dist_end = bounds["dist_end"]
-            extent = [dist_start, dist_end, time_end, time_start]
-        else:
-            if bounds:
-                extent = [bounds["dist_start"], bounds["dist_end"], bounds["time_end"], bounds["time_start"]]
-            else:
-                extent = None
+            return [dist_start, dist_end, time_end, time_start]
 
+        if bounds:
+            return [bounds["dist_start"], bounds["dist_end"], bounds["time_end"], bounds["time_start"]]
+
+        return None
+
+    def _create_plot_axes(self, pair_count: int):
+        if pair_count > 1:
+            ax_top = self.fig.add_subplot(2, 1, 1)
+            ax_bottom = self.fig.add_subplot(2, 1, 2)
+            return [ax_top, ax_bottom]
+
+        ax_left = self.fig.add_subplot(1, 1, 1)
+        return [ax_left]
+
+    def _apply_axis_labels(self, ax):
+        if self.header_info:
+            ax.set_xlabel("距离 (m)")
+            ax.set_ylabel("时间 (ns)")
+        else:
+            ax.set_xlabel("距离（道索引）")
+            ax.set_ylabel("时间（采样索引）")
+
+    def plot_data(self, data: np.ndarray):
+        self.fig.clear()
+        self._last_plot_signature = self._build_plot_signature()
+
+        display_data, bounds = self._prepare_view_data(data)
+        extent = self._resolve_plot_extent(display_data, bounds)
         cmap = self._get_colormap()
 
         if self.cbar is not None:
@@ -1636,25 +1657,13 @@ class GPRGuiQt(QMainWindow):
             self.cbar = None
 
         data_pairs = self._build_compare_data_pairs(display_data)
-        if len(data_pairs) > 1:
-            ax_top = self.fig.add_subplot(2, 1, 1)
-            ax_bottom = self.fig.add_subplot(2, 1, 2)
-            axes = [ax_top, ax_bottom]
-        else:
-            ax_left = self.fig.add_subplot(1, 1, 1)
-            axes = [ax_left]
+        axes = self._create_plot_axes(len(data_pairs))
 
         im = None
         for ax, (d, title) in zip(axes, data_pairs):
             im, title_suffix = self._draw_image_with_colormap(ax, d, cmap, extent)
             ax.set_title(f"{title}{title_suffix}")
-
-            if self.header_info:
-                ax.set_xlabel("距离 (m)")
-                ax.set_ylabel("时间 (ns)")
-            else:
-                ax.set_xlabel("距离（道索引）")
-                ax.set_ylabel("时间（采样索引）")
+            self._apply_axis_labels(ax)
             self._apply_axis_grid(ax)
 
         if im is not None:
