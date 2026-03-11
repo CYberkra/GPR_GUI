@@ -81,6 +81,11 @@ for _p in _read_file_candidates:
 
 from gpr_io import savecsv, save_image
 
+try:
+    import legacy_migration
+except Exception:
+    legacy_migration = None
+
 _CORE_FUNC_CACHE = {}
 
 
@@ -517,6 +522,7 @@ def method_kirchhoff_migration(data, dx=0.05, dt=0.1, v=0.10, aperture=20, **kwa
             "len": line_len,
             "weight": weight,
             "Contrast": contrast,
+            "linear_interp": int(linear_interp),
             "topo_cor": int(topo_cor),
             "hei_cor": int(hei_cor),
             "interface": int(interface),
@@ -845,10 +851,11 @@ class ProcessingWorker(QObject):
     error = pyqtSignal(str)
     progress = pyqtSignal(int, int, str)
 
-    def __init__(self, base_data: np.ndarray, tasks: list):
+    def __init__(self, base_data: np.ndarray, tasks: list, base_csv_path: str = None):
         super().__init__()
         self.base_data = np.array(base_data, copy=True)
         self.tasks = tasks
+        self.base_csv_path = base_csv_path
 
     def run(self):
         current_data = np.array(self.base_data, copy=True)
@@ -904,8 +911,18 @@ class ProcessingWorker(QObject):
                     if newdata.ndim == 1:
                         newdata = newdata.reshape(-1, 1)
                 else:
-                    result = method["func"](current_data, **params)
-                    newdata = result[0] if isinstance(result, tuple) else result
+                    if method_key == "kirchhoff_migration" and bool(params.get("_legacy_mode", False)):
+                        if legacy_migration is None:
+                            raise RuntimeError("legacy_migration import failed")
+                        csv_path = params.get("formatString") or self.base_csv_path
+                        if not csv_path:
+                            raise RuntimeError("legacy mode requires CSV path")
+                        legacy_result = legacy_migration.run(params, csv_path)
+                        newdata = np.array(legacy_result["migrated"], copy=True)
+                    else:
+                        local_params = {k: v for k, v in params.items() if not str(k).startswith("_")}
+                        result = method["func"](current_data, **local_params)
+                        newdata = result[0] if isinstance(result, tuple) else result
 
                 current_data = newdata
                 outputs.append({
@@ -1033,6 +1050,10 @@ class GPRGuiQt(QMainWindow):
         preset_btn_layout.addWidget(self.btn_backfill_params)
         preset_btn_layout.addWidget(self.btn_import_tzt_defaults)
         method_layout.addWidget(preset_btn_row)
+
+        self.legacy_mode_var = QCheckBox("legacy 模式（测试）")
+        self.legacy_mode_var.setChecked(False)
+        method_layout.addWidget(self.legacy_mode_var)
 
         self.param_container = QWidget()
         self.param_layout = QFormLayout(self.param_container)
@@ -1831,6 +1852,8 @@ class GPRGuiQt(QMainWindow):
         defaults = {p["name"]: p.get("default") for p in method.get("params", [])}
         overrides = self._method_param_overrides.get(method_key, {})
         defaults.update(overrides)
+        if method_key == "kirchhoff_migration":
+            defaults["_legacy_mode"] = bool(getattr(self, "legacy_mode_var", None) and self.legacy_mode_var.isChecked())
         return defaults
 
     def _apply_preset_by_key(self, preset_key: str):
@@ -2447,7 +2470,7 @@ class GPRGuiQt(QMainWindow):
             "restore_method_idx": restore_method_idx,
         }
         self._worker_thread = QThread(self)
-        self._worker = ProcessingWorker(self.data, tasks)
+        self._worker = ProcessingWorker(self.data, tasks, base_csv_path=self.data_path)
         self._worker.moveToThread(self._worker_thread)
         self._worker_thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._on_worker_progress)
@@ -2560,6 +2583,9 @@ class GPRGuiQt(QMainWindow):
             return
         self._method_param_overrides[method_key] = dict(params)
         if method_key == "kirchhoff_migration":
+            params["_legacy_mode"] = bool(self.legacy_mode_var.isChecked())
+            if params["_legacy_mode"]:
+                self._log("Kirchhoff 迁移：legacy 模式已启用（测试）")
             self._log_kirchhoff_migration_config(params, source="手动执行")
 
         out_dir = os.path.join(BASE_DIR, "output")
