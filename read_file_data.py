@@ -112,13 +112,24 @@ def savecsv(data, path: str):
 
 
 def save_image(data, outimagename: str, title: str = '',
-               time_range=None, distance_range=None, cmap='gray'):
+               time_range=None, distance_range=None, cmap='gray', **imshow_kwargs):
+    """Save B-scan image with backward-compatible colormap kwargs.
+
+    Notes:
+    - Keep explicit ``cmap`` parameter for existing call sites.
+    - Also accept extra ``imshow`` kwargs to tolerate older/newer callers.
+    """
+    if 'cmap' in imshow_kwargs and cmap == 'gray':
+        # Backward compatibility: if caller only provides cmap via kwargs,
+        # honor it while preserving explicit-arg precedence.
+        cmap = imshow_kwargs.pop('cmap')
+
     arr = np.asarray(data)
     plt.figure(figsize=(8, 4))
     extent = None
     if time_range is not None and distance_range is not None:
         extent = [distance_range[0], distance_range[1], time_range[1], time_range[0]]
-    plt.imshow(arr, cmap=cmap, aspect='auto', extent=extent)
+    plt.imshow(arr, cmap=cmap, aspect='auto', extent=extent, **imshow_kwargs)
     plt.title(title)
     plt.xlabel('Distance (m)')
     plt.ylabel('Time (ns)')
