@@ -1579,6 +1579,21 @@ class GPRGuiQt(QMainWindow):
         self._ds_cache[key] = (t_idx, d_idx)
         return t_idx, d_idx
 
+    @staticmethod
+    def _select_2d(data: np.ndarray, row_idx, col_idx) -> np.ndarray:
+        """Safe 2D selector for mixed slice/array indices.
+
+        np.ix_ only accepts 1-D sequences and raises on slice objects.
+        This helper keeps fast paths for pure slicing and uses np.ix_ only
+        when both axes are array-like integer indices.
+        """
+        if isinstance(row_idx, slice) or isinstance(col_idx, slice):
+            return data[row_idx, col_idx]
+
+        row_arr = np.asarray(row_idx).reshape(-1)
+        col_arr = np.asarray(col_idx).reshape(-1)
+        return data[np.ix_(row_arr, col_arr)]
+
     def _downsample_data(self, data: np.ndarray) -> np.ndarray:
         if not self.fast_preview_var.isChecked():
             return data
@@ -1586,9 +1601,7 @@ class GPRGuiQt(QMainWindow):
         max_traces = self._parse_int_edit(self.max_traces_edit, default=0)
         n_time, n_dist = data.shape
         t_idx, d_idx = self._get_downsample_indices(n_time, n_dist, max_samples, max_traces)
-        if isinstance(t_idx, slice) or isinstance(d_idx, slice):
-            return data[t_idx, d_idx]
-        return data[np.ix_(t_idx, d_idx)]
+        return self._select_2d(data, t_idx, d_idx)
 
     def _downsample_for_display(self, data: np.ndarray) -> np.ndarray:
         if not self.display_downsample_var.isChecked():
@@ -1597,9 +1610,7 @@ class GPRGuiQt(QMainWindow):
         max_traces = self._parse_int_edit(self.display_max_traces_edit, default=0)
         n_time, n_dist = data.shape
         t_idx, d_idx = self._get_downsample_indices(n_time, n_dist, max_samples, max_traces)
-        if isinstance(t_idx, slice) or isinstance(d_idx, slice):
-            return data[t_idx, d_idx]
-        return data[np.ix_(t_idx, d_idx)]
+        return self._select_2d(data, t_idx, d_idx)
 
     def _prepare_view_data(self, data: np.ndarray):
         prepare_start_ts = time.perf_counter()
