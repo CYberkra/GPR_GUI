@@ -15,6 +15,7 @@ import sys
 import re
 import time
 import subprocess
+import tempfile
 from datetime import datetime
 
 import numpy as np
@@ -879,37 +880,51 @@ class ProcessingWorker(QObject):
                     end_position = current_data.shape[1]
                     scans_per_meter = 1
 
-                    temp_in_csv = os.path.join(out_dir, "__tmp_in.csv")
-                    out_csv = os.path.join(out_dir, f"__tmp_{i}_{method_key}_out.csv")
-                    out_png = os.path.join(out_dir, f"__tmp_{i}_{method_key}_out.png")
-                    savecsv(current_data, temp_in_csv)
+                    temp_paths = []
+                    try:
+                        with tempfile.NamedTemporaryFile(prefix="gpr_in_", suffix=".csv", dir=out_dir, delete=False) as f_in:
+                            temp_in_csv = f_in.name
+                        with tempfile.NamedTemporaryFile(prefix=f"gpr_{i}_{method_key}_", suffix="_out.csv", dir=out_dir, delete=False) as f_out_csv:
+                            out_csv = f_out_csv.name
+                        with tempfile.NamedTemporaryFile(prefix=f"gpr_{i}_{method_key}_", suffix="_out.png", dir=out_dir, delete=False) as f_out_png:
+                            out_png = f_out_png.name
+                        temp_paths.extend([temp_in_csv, out_csv, out_png])
 
-                    if method_key == "compensatingGain":
-                        gain_min = float(params.get("gain_min", 1.0))
-                        gain_max = float(params.get("gain_max", 6.0))
-                        gain_func = np.linspace(gain_min, gain_max, current_data.shape[0]).tolist()
-                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, end_position, gain_func)
-                    elif method_key == "dewow":
-                        window = int(params.get("window", max(1, length_trace // 4)))
-                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter, window)
-                    elif method_key == "set_zero_time":
-                        new_zero_time = float(params.get("new_zero_time", 5.0))
-                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter, new_zero_time)
-                    elif method_key == "agcGain":
-                        window = int(params.get("window", max(1, length_trace // 4)))
-                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter, window)
-                    elif method_key == "subtracting_average_2D":
-                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter)
-                    elif method_key == "running_average_2D":
-                        func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter)
-                    else:
-                        raise RuntimeError(f"Unknown core method: {method_key}")
+                        savecsv(current_data, temp_in_csv)
 
-                    if not os.path.exists(out_csv):
-                        raise RuntimeError(f"Output CSV not found: {out_csv}")
-                    newdata = _read_matrix_csv_fast(out_csv)
-                    if newdata.ndim == 1:
-                        newdata = newdata.reshape(-1, 1)
+                        if method_key == "compensatingGain":
+                            gain_min = float(params.get("gain_min", 1.0))
+                            gain_max = float(params.get("gain_max", 6.0))
+                            gain_func = np.linspace(gain_min, gain_max, current_data.shape[0]).tolist()
+                            func(temp_in_csv, out_csv, out_png, length_trace, start_position, end_position, gain_func)
+                        elif method_key == "dewow":
+                            window = int(params.get("window", max(1, length_trace // 4)))
+                            func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter, window)
+                        elif method_key == "set_zero_time":
+                            new_zero_time = float(params.get("new_zero_time", 5.0))
+                            func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter, new_zero_time)
+                        elif method_key == "agcGain":
+                            window = int(params.get("window", max(1, length_trace // 4)))
+                            func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter, window)
+                        elif method_key == "subtracting_average_2D":
+                            func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter)
+                        elif method_key == "running_average_2D":
+                            func(temp_in_csv, out_csv, out_png, length_trace, start_position, scans_per_meter)
+                        else:
+                            raise RuntimeError(f"Unknown core method: {method_key}")
+
+                        if not os.path.exists(out_csv):
+                            raise RuntimeError(f"Output CSV not found: {out_csv}")
+                        newdata = _read_matrix_csv_fast(out_csv)
+                        if newdata.ndim == 1:
+                            newdata = newdata.reshape(-1, 1)
+                    finally:
+                        for p in temp_paths:
+                            try:
+                                if p and os.path.exists(p):
+                                    os.remove(p)
+                            except Exception:
+                                pass
                 else:
                     if method_key == "kirchhoff_migration" and bool(params.get("_legacy_mode", False)):
                         if legacy_migration is None:
@@ -2054,8 +2069,14 @@ class GPRGuiQt(QMainWindow):
                 data = self._downsample_data(data)
                 self._log("快速预览：数据已降采样。")
 
-            if np.isnan(data).any():
-                data = np.nan_to_num(data, nan=np.nanmean(data))
+            if not np.isfinite(data).all():
+                finite_mask = np.isfinite(data)
+                if finite_mask.any():
+                    fill_value = float(np.mean(data[finite_mask]))
+                else:
+                    fill_value = 0.0
+                data = np.nan_to_num(data, nan=fill_value, posinf=fill_value, neginf=fill_value)
+                self._log(f"检测到 NaN/Inf，已使用 {fill_value:.6g} 填充。")
 
             if data.ndim == 1:
                 data = data.reshape(-1, 1)
@@ -2574,13 +2595,14 @@ class GPRGuiQt(QMainWindow):
         method_key = self.method_keys[idx]
         method = PROCESSING_METHODS[method_key]
         self._log(f"Applying: {method['name']}")
-        self._push_history()
 
         try:
             params = self._get_params()
         except ValueError as e:
             QMessageBox.critical(self, "Invalid parameter", str(e))
             return
+
+        self._push_history()
         self._method_param_overrides[method_key] = dict(params)
         if method_key == "kirchhoff_migration":
             params["_legacy_mode"] = bool(self.legacy_mode_var.isChecked())
