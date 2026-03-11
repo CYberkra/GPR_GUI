@@ -25,7 +25,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-from read_file_data import readcsv, savecsv, save_image
+from gpr_io import readcsv, savecsv, save_image
 
 
 # ============ 处理方法实现 ============

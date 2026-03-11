@@ -37,7 +37,7 @@ if CORE_DIR not in sys.path:
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-from read_file_data import savecsv, save_image
+from gpr_io import savecsv, save_image
 
 
 # 匹配真实的带单位表头

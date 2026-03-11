@@ -79,7 +79,7 @@ for _p in _read_file_candidates:
     if os.path.isdir(_p) and _p not in sys.path:
         sys.path.insert(0, _p)
 
-from read_file_data import savecsv, save_image
+from gpr_io import savecsv, save_image
 
 _CORE_FUNC_CACHE = {}
 
