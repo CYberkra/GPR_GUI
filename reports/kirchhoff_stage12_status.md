@@ -12,10 +12,10 @@
    - Merge isolated Kirchhoff/depth updates 到主分支。
 2. `9c0830e`（`origin/main` 已推送）
    - 主要完成 tzt 默认参数导入、UI 展示、日志记录；并未完整完成 stage2 计算升级。
-3. `（本次补提）`
-   - 在 `method_kirchhoff_migration` 中完成：
-     - stage1：`M-depth/T/len/weight/Contrast` + `topo_cor/hei_cor/interface` 接入真实计算路径；
-     - stage2：走时采样由整数索引升级为线性插值；叠加采用偏移相关权重（taper + 几何衰减）升级。
+3. `2064eda`（已推送）
+   - 完成 stage1 计算路径接入：`M-depth/T/len/weight/Contrast` + `topo_cor/hei_cor/interface` 进入 Kirchhoff 实算。
+4. `5b477b4`（已推送，本次补提）
+   - 完成 stage2：走时采样由整数索引升级为线性插值；叠加采用偏移相关权重（taper + 几何衰减）升级。
 
 ## 关键变更摘要
 
