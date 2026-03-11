@@ -424,12 +424,37 @@ def method_sliding_average(data, window_size=10, axis=1, **kwargs):
 
 
 def method_kirchhoff_migration(data, dx=0.05, dt=0.1, v=0.10, aperture=20, **kwargs):
-    """Kirchhoff 积分迁移 (向量化加速版)"""
-    ny, nx = data.shape
-    migrated = np.zeros_like(data)
+    """Kirchhoff 积分迁移 (向量化加速版, stage1 参数映射 + stage2 插值/权重升级)."""
+    arr = np.array(data, dtype=float, copy=True)
+    ny, nx = arr.shape
+    migrated = np.zeros_like(arr)
 
-    t = np.arange(ny) * dt
-    if ny > 0:
+    # --- stage1: map txt/tzt params into migration path ---
+    time_window = max(1, int(float(kwargs.get("T", ny))))
+    depth_limit = max(1, int(float(kwargs.get("M-depth", ny))))
+    line_len = max(1, int(float(kwargs.get("len", nx))))
+    weight = float(kwargs.get("weight", 1.0))
+    contrast = float(kwargs.get("Contrast", 1.0))
+
+    topo_cor = int(float(kwargs.get("topo_cor", 0))) != 0
+    hei_cor = int(float(kwargs.get("hei_cor", 0))) != 0
+    interface = int(float(kwargs.get("interface", 0))) != 0
+
+    ny_eff = min(ny, time_window)
+    depth_eff = min(ny_eff, depth_limit)
+
+    # len -> spacing scale mapping (line shorter -> tighter spacing, longer -> wider spacing)
+    dx_scale = float(nx) / float(line_len) if line_len > 0 else 1.0
+
+    # lightweight corrections gated by switches (non-destructive stage1)
+    if topo_cor and ny > 0:
+        arr = arr - arr[0:1, :]
+    if hei_cor:
+        depth_axis = np.linspace(0.0, 1.0, ny, endpoint=True)
+        arr = arr * (0.9 + 0.1 * depth_axis[:, None])
+
+    t = np.arange(ny_eff) * dt
+    if ny_eff > 0:
         t[0] = 1e-6
     t0_sq = t ** 2
 
@@ -437,18 +462,60 @@ def method_kirchhoff_migration(data, dx=0.05, dt=0.1, v=0.10, aperture=20, **kwa
         start_tr = max(0, ix - int(aperture))
         end_tr = min(nx, ix + int(aperture) + 1)
 
-        dist = (np.arange(start_tr, end_tr) - ix) * dx
+        dist = (np.arange(start_tr, end_tr) - ix) * dx * dx_scale
         dx_term = 4 * (dist ** 2) / (v ** 2)
 
         t_travel = np.sqrt(t0_sq[:, None] + dx_term[None, :])
-        t_idx = (t_travel / dt).astype(int)
-        valid_mask = t_idx < ny
+        t_pos = t_travel / dt
+
+        # stage2: sub-sample interpolation + offset-aware weighting
+        trace_offsets = np.abs(np.arange(start_tr, end_tr) - ix).astype(float)
+        if trace_offsets.size > 0:
+            taper = 1.0 - (trace_offsets / (float(aperture) + 1.0))
+            taper = np.clip(taper, 0.15, 1.0)
+        else:
+            taper = np.array([], dtype=float)
+        geom = 1.0 / np.sqrt(1.0 + dx_term)
+        trace_weights = taper * geom
 
         for i_d, tr in enumerate(range(start_tr, end_tr)):
-            valid_t = valid_mask[:, i_d]
-            migrated[valid_t, ix] += data[t_idx[valid_t, i_d], tr]
+            row_ids = np.arange(depth_eff)
+            if row_ids.size == 0:
+                continue
 
-    return migrated, None
+            pos = t_pos[row_ids, i_d]
+            valid = (pos >= 0.0) & (pos < (ny_eff - 1))
+            if not np.any(valid):
+                continue
+
+            rows = row_ids[valid]
+            pos_v = pos[valid]
+            i0 = np.floor(pos_v).astype(int)
+            frac = pos_v - i0
+            i1 = np.minimum(i0 + 1, ny_eff - 1)
+
+            s0 = arr[i0, tr]
+            s1 = arr[i1, tr]
+            interp = (1.0 - frac) * s0 + frac * s1
+
+            migrated[rows, ix] += weight * trace_weights[i_d] * interp
+
+    if interface:
+        migrated = np.abs(np.gradient(migrated, axis=0))
+
+    migrated *= contrast
+    return migrated, {
+        "mapped_params": {
+            "T": time_window,
+            "M-depth": depth_limit,
+            "len": line_len,
+            "weight": weight,
+            "Contrast": contrast,
+            "topo_cor": int(topo_cor),
+            "hei_cor": int(hei_cor),
+            "interface": int(interface),
+        }
+    }
 
 
 def method_time_to_depth(data, dt=0.1, v=0.10, dz=0.02, **kwargs):
@@ -496,10 +563,14 @@ TZT_MIGRATION_DEFAULTS = {
     "gpu_index": 0,
 }
 
-KIRCHHOFF_APPLIED_FIELDS = {"dx", "dt", "v", "aperture"}
+KIRCHHOFF_APPLIED_FIELDS = {
+    "dx", "dt", "v", "aperture",
+    "len", "M-depth", "T", "weight", "Contrast",
+    "interface", "topo_cor", "hei_cor",
+}
 KIRCHHOFF_STORED_ONLY_FIELDS = {
-    "SFCW", "freq", "len", "M-depth", "T", "num_cal", "formatString", "MIG_Method",
-    "interface", "topo_cor", "hei_cor", "Drill", "Contrast", "weight", "ini_model", "gpu_index",
+    "SFCW", "freq", "num_cal", "formatString", "MIG_Method",
+    "Drill", "ini_model", "gpu_index",
 }
 
 PROCESSING_METHODS = {
