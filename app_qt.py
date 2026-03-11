@@ -435,6 +435,7 @@ def method_kirchhoff_migration(data, dx=0.05, dt=0.1, v=0.10, aperture=20, **kwa
     line_len = max(1, int(float(kwargs.get("len", nx))))
     weight = float(kwargs.get("weight", 1.0))
     contrast = float(kwargs.get("Contrast", 1.0))
+    linear_interp = int(float(kwargs.get("linear_interp", 1))) != 0
 
     topo_cor = int(float(kwargs.get("topo_cor", 0))) != 0
     hei_cor = int(float(kwargs.get("hei_cor", 0))) != 0
@@ -490,15 +491,20 @@ def method_kirchhoff_migration(data, dx=0.05, dt=0.1, v=0.10, aperture=20, **kwa
 
             rows = row_ids[valid]
             pos_v = pos[valid]
-            i0 = np.floor(pos_v).astype(int)
-            frac = pos_v - i0
-            i1 = np.minimum(i0 + 1, ny_eff - 1)
+            if linear_interp:
+                i0 = np.floor(pos_v).astype(int)
+                frac = pos_v - i0
+                i1 = np.minimum(i0 + 1, ny_eff - 1)
 
-            s0 = arr[i0, tr]
-            s1 = arr[i1, tr]
-            interp = (1.0 - frac) * s0 + frac * s1
+                s0 = arr[i0, tr]
+                s1 = arr[i1, tr]
+                sampled = (1.0 - frac) * s0 + frac * s1
+            else:
+                i_nn = np.rint(pos_v).astype(int)
+                i_nn = np.clip(i_nn, 0, ny_eff - 1)
+                sampled = arr[i_nn, tr]
 
-            migrated[rows, ix] += weight * trace_weights[i_d] * interp
+            migrated[rows, ix] += weight * trace_weights[i_d] * sampled
 
     if interface:
         migrated = np.abs(np.gradient(migrated, axis=0))
