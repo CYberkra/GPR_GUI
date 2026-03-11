@@ -476,6 +476,32 @@ def method_sec_gain(data, gain_min=1.0, gain_max=6.0, power=1.0, **kwargs):
     t = (np.linspace(0, 1, n) ** max(power, 1e-6))
     gain = gain_min + (gain_max - gain_min) * t
     return arr * gain[:, None], gain
+TZT_MIGRATION_DEFAULTS = {
+    "SFCW": 0,
+    "freq": 50e6,
+    "len": 122,
+    "M-depth": 40,
+    "T": 800,
+    "v": 0.1,
+    "num_cal": 1,
+    "formatString": "C:/Users/Hzory/Desktop/testN6/data.csv",
+    "MIG_Method": "Kir",
+    "interface": 0,
+    "topo_cor": 1,
+    "hei_cor": 1,
+    "Drill": 0,
+    "Contrast": 1,
+    "weight": 0.5,
+    "ini_model": 0,
+    "gpu_index": 0,
+}
+
+KIRCHHOFF_APPLIED_FIELDS = {"dx", "dt", "v", "aperture"}
+KIRCHHOFF_STORED_ONLY_FIELDS = {
+    "SFCW", "freq", "len", "M-depth", "T", "num_cal", "formatString", "MIG_Method",
+    "interface", "topo_cor", "hei_cor", "Drill", "Contrast", "weight", "ini_model", "gpu_index",
+}
+
 PROCESSING_METHODS = {
     "compensatingGain": {
         "name": "0 compensatingGain (manual gain compensation)",
@@ -583,6 +609,22 @@ PROCESSING_METHODS = {
             {"name": "dt", "label": "时间步长 (ns)", "type": "float", "default": 0.1, "min": 0.01, "max": 10.0},
             {"name": "v", "label": "波速 (m/ns)", "type": "float", "default": 0.10, "min": 0.01, "max": 0.3},
             {"name": "aperture", "label": "孔径 (单侧道数)", "type": "int", "default": 20, "min": 1, "max": 200},
+            {"name": "SFCW", "label": "SFCW", "type": "int", "default": 0, "min": 0, "max": 1},
+            {"name": "freq", "label": "频率(Hz)", "type": "float", "default": 50e6, "min": 1.0, "max": 1e12},
+            {"name": "len", "label": "长度(len)", "type": "int", "default": 122, "min": 1, "max": 100000},
+            {"name": "M-depth", "label": "迁移深度(M-depth)", "type": "int", "default": 40, "min": 1, "max": 100000},
+            {"name": "T", "label": "时间窗口T", "type": "int", "default": 800, "min": 1, "max": 10000000},
+            {"name": "num_cal", "label": "num_cal", "type": "int", "default": 1, "min": 0, "max": 1000},
+            {"name": "formatString", "label": "formatString", "type": "str", "default": "C:/Users/Hzory/Desktop/testN6/data.csv"},
+            {"name": "MIG_Method", "label": "MIG_Method", "type": "str", "default": "Kir"},
+            {"name": "interface", "label": "interface", "type": "int", "default": 0, "min": 0, "max": 1},
+            {"name": "topo_cor", "label": "topo_cor", "type": "int", "default": 1, "min": 0, "max": 1},
+            {"name": "hei_cor", "label": "hei_cor", "type": "int", "default": 1, "min": 0, "max": 1},
+            {"name": "Drill", "label": "Drill", "type": "int", "default": 0, "min": 0, "max": 1},
+            {"name": "Contrast", "label": "Contrast", "type": "int", "default": 1, "min": 0, "max": 1},
+            {"name": "weight", "label": "weight", "type": "float", "default": 0.5, "min": 0.0, "max": 10.0},
+            {"name": "ini_model", "label": "ini_model", "type": "int", "default": 0, "min": 0, "max": 1000},
+            {"name": "gpu_index", "label": "gpu_index", "type": "int", "default": 0, "min": 0, "max": 16},
         ],
     },
     "time_to_depth": {
@@ -909,8 +951,10 @@ class GPRGuiQt(QMainWindow):
         preset_btn_layout.setContentsMargins(0, 0, 0, 0)
         self.btn_apply_preset = QPushButton("应用预设")
         self.btn_backfill_params = QPushButton("回填当前参数")
+        self.btn_import_tzt_defaults = QPushButton("导入 tzt 为迁移默认")
         preset_btn_layout.addWidget(self.btn_apply_preset)
         preset_btn_layout.addWidget(self.btn_backfill_params)
+        preset_btn_layout.addWidget(self.btn_import_tzt_defaults)
         method_layout.addWidget(preset_btn_row)
 
         self.param_container = QWidget()
@@ -1156,6 +1200,7 @@ class GPRGuiQt(QMainWindow):
         self.method_combo.currentIndexChanged.connect(self._on_method_change)
         self.btn_apply_preset.clicked.connect(self.apply_selected_preset)
         self.btn_backfill_params.clicked.connect(self.backfill_current_method_params)
+        self.btn_import_tzt_defaults.clicked.connect(self.import_tzt_as_migration_defaults)
         self.cmap_combo.currentIndexChanged.connect(self._refresh_plot)
         self.compare_left_combo.currentIndexChanged.connect(self._refresh_plot)
         self.compare_right_combo.currentIndexChanged.connect(self._refresh_plot)
@@ -1765,6 +1810,81 @@ class GPRGuiQt(QMainWindow):
         self._log(f"Backfilled current params: {METHOD_DISPLAY_NAMES.get(method_key, method_key)}")
         self.status_label.setText("已回填当前参数到UI")
 
+    def _extract_kirchhoff_migration_snapshot(self, params: dict) -> dict:
+        method = PROCESSING_METHODS.get("kirchhoff_migration", {})
+        ordered = [p["name"] for p in method.get("params", [])]
+        snapshot = {}
+        for name in ordered:
+            if name in params:
+                snapshot[name] = params[name]
+        return snapshot
+
+    def _log_kirchhoff_migration_config(self, params: dict, source: str = "执行"):
+        snapshot = self._extract_kirchhoff_migration_snapshot(params)
+        if not snapshot:
+            return
+        applied = {k: snapshot[k] for k in snapshot if k in KIRCHHOFF_APPLIED_FIELDS}
+        stored_only = {k: snapshot[k] for k in snapshot if k in KIRCHHOFF_STORED_ONLY_FIELDS}
+        self._log(f"Kirchhoff迁移默认配置({source}) - 应用参数: {applied}")
+        if stored_only:
+            self._log(f"Kirchhoff迁移默认配置({source}) - 存档参数(仅记录): {stored_only}")
+
+    def _parse_tzt_file(self, path: str) -> dict:
+        parsed = {}
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split(None, 1)
+                if len(parts) < 2:
+                    continue
+                key = parts[0].strip()
+                val_raw = parts[1].strip()
+                if val_raw.lower() in {"true", "false"}:
+                    parsed[key] = 1 if val_raw.lower() == "true" else 0
+                    continue
+                try:
+                    num = float(val_raw)
+                    parsed[key] = int(num) if num.is_integer() else num
+                except ValueError:
+                    parsed[key] = val_raw
+        return parsed
+
+    def import_tzt_as_migration_defaults(self):
+        path, _ = QFileDialog.getOpenFileName(self, "导入 tzt 参数", "", "参数文件 (*.tzt *.txt *.cfg);;所有文件 (*)")
+        if not path:
+            return
+        try:
+            parsed = self._parse_tzt_file(path)
+        except Exception as e:
+            QMessageBox.critical(self, "导入失败", f"读取 tzt 参数失败: {e}")
+            return
+
+        method = PROCESSING_METHODS["kirchhoff_migration"]
+        allowed = {p["name"] for p in method.get("params", [])}
+        merged = self._resolve_method_params("kirchhoff_migration")
+        for k, v in TZT_MIGRATION_DEFAULTS.items():
+            if k in allowed:
+                merged[k] = v
+        for k, v in parsed.items():
+            if k in allowed:
+                merged[k] = v
+
+        self._method_param_overrides["kirchhoff_migration"] = merged
+        current_key = self.method_keys[self.method_combo.currentIndex()] if self.method_combo.currentIndex() >= 0 else ""
+        if current_key == "kirchhoff_migration":
+            self._render_params("kirchhoff_migration")
+
+        covered = sorted([k for k in merged.keys() if k in allowed and k in parsed])
+        missing = sorted([k for k in TZT_MIGRATION_DEFAULTS.keys() if k not in parsed])
+        self._log(f"已导入 tzt 迁移默认配置: {path}")
+        self._log(f"tzt覆盖参数: {covered}")
+        if missing:
+            self._log(f"tzt缺失参数（已回退内置默认）: {missing}")
+        self._log_kirchhoff_migration_config(merged, source="导入tzt")
+        self.status_label.setText("已导入 tzt 为 Kirchhoff 迁移默认配置")
+
     # --------- Data I/O ---------
     def load_csv(self):
         path, _ = QFileDialog.getOpenFileName(self, "选择 CSV", "", "CSV 文件 (*.csv);;所有文件 (*)")
@@ -2142,7 +2262,7 @@ class GPRGuiQt(QMainWindow):
         for idx in selected:
             method_key = self.method_keys[idx]
             method = PROCESSING_METHODS[method_key]
-            params = {p["name"]: p.get("default") for p in method.get("params", [])}
+            params = self._resolve_method_params(method_key)
             tasks.append({
                 "method_key": method_key,
                 "method": method,
@@ -2285,6 +2405,10 @@ class GPRGuiQt(QMainWindow):
             self.record.append(
                 f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {method_name} | {os.path.basename(out_csv)}"
             )
+            if method_key == "kirchhoff_migration":
+                migration_params = self._resolve_method_params("kirchhoff_migration")
+                self._log_kirchhoff_migration_config(migration_params, source="执行后记录")
+                self.record.append(f"  migration-config={self._extract_kirchhoff_migration_snapshot(migration_params)}")
             compare_snapshots.append({"label": method_name, "data": method_data})
 
         if self.data is not None:
@@ -2358,6 +2482,8 @@ class GPRGuiQt(QMainWindow):
             QMessageBox.critical(self, "Invalid parameter", str(e))
             return
         self._method_param_overrides[method_key] = dict(params)
+        if method_key == "kirchhoff_migration":
+            self._log_kirchhoff_migration_config(params, source="手动执行")
 
         out_dir = os.path.join(BASE_DIR, "output")
         os.makedirs(out_dir, exist_ok=True)
