@@ -1586,6 +1586,8 @@ class GPRGuiQt(QMainWindow):
         max_traces = self._parse_int_edit(self.max_traces_edit, default=0)
         n_time, n_dist = data.shape
         t_idx, d_idx = self._get_downsample_indices(n_time, n_dist, max_samples, max_traces)
+        if isinstance(t_idx, slice) or isinstance(d_idx, slice):
+            return data[t_idx, d_idx]
         return data[np.ix_(t_idx, d_idx)]
 
     def _downsample_for_display(self, data: np.ndarray) -> np.ndarray:
@@ -1595,6 +1597,8 @@ class GPRGuiQt(QMainWindow):
         max_traces = self._parse_int_edit(self.display_max_traces_edit, default=0)
         n_time, n_dist = data.shape
         t_idx, d_idx = self._get_downsample_indices(n_time, n_dist, max_samples, max_traces)
+        if isinstance(t_idx, slice) or isinstance(d_idx, slice):
+            return data[t_idx, d_idx]
         return data[np.ix_(t_idx, d_idx)]
 
     def _prepare_view_data(self, data: np.ndarray):

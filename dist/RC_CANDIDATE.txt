@@ -1,6 +1,6 @@
 RC: v0.2.0-rc1+a0bb7cf
 Commit: a0bb7cf
-GeneratedAt: 2026-03-11T01:58:00+08:00
-Decision: NO-GO
-Gate: preflight passed and commit aligned; blocker remains smoke_offscreen revalidation (no PASS evidence in this rebuild round)
+GeneratedAt: 2026-03-11T10:06:00+08:00
+Decision: GO
+Gate: preflight passed and commit aligned; smoke_offscreen revalidation passed in current round (see reports/smoke_unblock_rc_evidence.md)
 Artifacts: dist/GPR_GUI_Qt_win_20260311_a0bb7cf.exe ; dist/GPR_GUI_Qt_win_20260311_a0bb7cf_pe_verify.txt

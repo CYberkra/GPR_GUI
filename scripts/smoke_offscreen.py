@@ -22,6 +22,8 @@ import time
 import traceback
 from pathlib import Path
 from unittest.mock import patch
+from datetime import datetime, timezone
+from contextlib import nullcontext
 
 # Ensure repo root is importable when script is executed from scripts/
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -57,6 +59,12 @@ def _parse_args() -> argparse.Namespace:
         default=REPO_ROOT / "reports" / "gui_step8_smoke_result.json",
         help="Where to write structured JSON result",
     )
+    parser.add_argument(
+        "--hard-timeout-sec",
+        type=float,
+        default=60.0,
+        help="Hard timeout for whole smoke run to guarantee convergence",
+    )
     return parser.parse_args()
 
 
@@ -88,10 +96,34 @@ def _refresh_plot_and_wait(app, win, timeout_sec: float = 3.0) -> tuple[bool, st
     return False, "plot refresh timeout"
 
 
+def _is_offscreen_mode() -> bool:
+    return os.environ.get("QT_QPA_PLATFORM", "").strip().lower() == "offscreen"
+
+
+def _install_headless_messagebox_guards(qmessagebox):
+    if not _is_offscreen_mode():
+        return None
+
+    def _stub(*_args, **_kwargs):
+        return getattr(qmessagebox.StandardButton, "Ok", 0)
+
+    return patch.multiple(
+        qmessagebox,
+        information=_stub,
+        warning=_stub,
+        critical=_stub,
+        question=_stub,
+    )
+
+
 def main() -> int:
     args = _parse_args()
+    start_ts = time.time()
+    hard_deadline = start_ts + max(1.0, float(args.hard_timeout_sec))
+
     result = {
         "name": "gui_keypath_smoke_offscreen",
+        "timestamp": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
         "pass": False,
         "reason": "",
         "env": {
@@ -102,6 +134,7 @@ def main() -> int:
             "sample": str(args.sample),
             "method_key": args.method_key,
             "timeout_sec": args.timeout_sec,
+            "hard_timeout_sec": args.hard_timeout_sec,
         },
         "checkpoints": {
             "startup": False,
@@ -127,7 +160,7 @@ def main() -> int:
             raise FileNotFoundError(f"Sample CSV not found: {args.sample}")
 
         from PyQt6.QtWidgets import QApplication
-        from app_qt import GPRGuiQt, apply_theme, QFileDialog
+        from app_qt import GPRGuiQt, apply_theme, QFileDialog, QMessageBox
 
         app = QApplication.instance() or QApplication([])
         theme = apply_theme(app)
@@ -135,23 +168,29 @@ def main() -> int:
         result["metrics"]["theme"] = theme
         result["checkpoints"]["startup"] = True
 
-        # 1) GUI load_csv path (mock file dialog selection)
-        with patch.object(QFileDialog, "getOpenFileName", return_value=(str(args.sample), "CSV 文件 (*.csv)")):
-            win.load_csv()
-        if getattr(win, "data", None) is None:
-            raise RuntimeError("load_csv executed but win.data is None")
-        result["checkpoints"]["load_sample"] = True
-        result["metrics"]["data_shape"] = list(win.data.shape)
+        msgbox_guard = _install_headless_messagebox_guards(QMessageBox)
+        with (msgbox_guard or nullcontext()):
+            # 1) GUI load_csv path (mock file dialog selection)
+            with patch.object(QFileDialog, "getOpenFileName", return_value=(str(args.sample), "CSV 文件 (*.csv)")):
+                win.load_csv()
+            if getattr(win, "data", None) is None:
+                raise RuntimeError("load_csv executed but win.data is None")
+            result["checkpoints"]["load_sample"] = True
+            result["metrics"]["data_shape"] = list(win.data.shape)
 
-        # 2) run one core processing method
-        if args.method_key not in getattr(win, "method_keys", []):
-            raise RuntimeError(f"Method key not found in UI: {args.method_key}")
-        method_idx = win.method_keys.index(args.method_key)
-        win.method_combo.setCurrentIndex(method_idx)
-        # Smoke focuses on GUI key path; bypass file-export side effects in _on_worker_finished.
-        with patch.object(win, "_save_outputs", return_value=(str(REPO_ROOT / "output" / "smoke_dummy.csv"), None)):
-            win.apply_method()
-            ok, msg = _wait_worker_done(app, win, args.timeout_sec)
+            if time.time() >= hard_deadline:
+                raise TimeoutError(f"hard timeout after {args.hard_timeout_sec:.1f}s before processing")
+
+            # 2) run one core processing method
+            if args.method_key not in getattr(win, "method_keys", []):
+                raise RuntimeError(f"Method key not found in UI: {args.method_key}")
+            method_idx = win.method_keys.index(args.method_key)
+            win.method_combo.setCurrentIndex(method_idx)
+            # Smoke focuses on GUI key path; bypass file-export side effects in _on_worker_finished.
+            with patch.object(win, "_save_outputs", return_value=(str(REPO_ROOT / "output" / "smoke_dummy.csv"), None)):
+                win.apply_method()
+                remaining = max(0.1, min(args.timeout_sec, hard_deadline - time.time()))
+                ok, msg = _wait_worker_done(app, win, remaining)
         if not ok:
             raise TimeoutError(msg)
         result["checkpoints"]["core_process_once"] = True
@@ -193,6 +232,8 @@ def main() -> int:
                 app.quit()
             except Exception:
                 pass
+
+    result.setdefault("metrics", {})["elapsed_sec"] = round(time.time() - start_ts, 3)
 
     args.json_out.parent.mkdir(parents=True, exist_ok=True)
     args.json_out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")

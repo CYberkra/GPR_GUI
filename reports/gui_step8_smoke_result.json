@@ -1,5 +1,6 @@
 {
   "name": "gui_keypath_smoke_offscreen",
+  "timestamp": "2026-03-11T10:04:57+08:00",
   "pass": true,
   "reason": "PASS",
   "env": {
@@ -11,7 +12,8 @@
   "input": {
     "sample": "/mnt/e/Openclaw/.openclaw/workspace/repos/GPR_GUI/sample_data/regression_v1/sample_layered_small.csv",
     "method_key": "dewow",
-    "timeout_sec": 30.0
+    "timeout_sec": 25.0,
+    "hard_timeout_sec": 60.0
   },
   "checkpoints": {
     "startup": true,
@@ -29,7 +31,8 @@
     "process_status": "worker completed",
     "plot_status": "refresh dedup skip_count 0 -> 1",
     "plot_draw_count": 2,
-    "plot_last_ms": 11.958527960814536
+    "plot_last_ms": 10.676766047254205,
+    "elapsed_sec": 1.9
   },
   "error": null
 }
