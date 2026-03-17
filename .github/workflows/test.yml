@@ -1,48 +1,203 @@
-name: Tests
+name: Tests & Coverage
 
 on:
   push:
     branches: [ main, develop ]
+    paths:
+      - '**.py'
+      - 'tests/**'
+      - 'requirements*.txt'
+      - '.github/workflows/test.yml'
   pull_request:
     branches: [ main ]
+    paths:
+      - '**.py'
+      - 'tests/**'
+      - 'requirements*.txt'
+      - '.github/workflows/test.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  # ============ 测试矩阵 ============
   test:
-    runs-on: ubuntu-latest
+    name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ['3.9', '3.10', '3.11', '3.12']
+        exclude:
+          # 减少矩阵大小：macOS 只测试最新 Python
+          - os: macos-latest
+            python-version: '3.9'
+          - os: macos-latest
+            python-version: '3.10'
+          - os: macos-latest
+            python-version: '3.11'
 
     steps:
     - uses: actions/checkout@v4
+    
+    # ============ 缓存系统依赖 (Ubuntu) ============
+    - name: Cache APT packages
+      if: runner.os == 'Linux'
+      uses: actions/cache@v4
+      with:
+        path: /var/cache/apt
+        key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/test.yml') }}
+        restore-keys: |
+          ${{ runner.os }}-apt-
+    
+    - name: Install system dependencies (Ubuntu)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          libgl1-mesa-glx \
+          libxkbcommon-x11-0 \
+          libxcb-icccm4 \
+          libxcb-image0 \
+          libxcb-keysyms1 \
+          libxcb-randr0 \
+          libxcb-render-util0 \
+          libxcb-xinerama0 \
+          libxcb-xfixes0 \
+          libegl1 \
+          libxcb-shape0 \
+          xvfb
+    
+    - name: Install system dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install qt@6
+        echo "$(brew --prefix qt@6)/bin" >> $GITHUB_PATH
     
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libgl1-mesa-glx libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xfixes0 libegl1 libxcb-shape0
+        cache: 'pip'
+        cache-dependency-path: |
+          requirements.txt
+          requirements-dev.txt
     
     - name: Install Python dependencies
       run: |
-        python -m pip install --upgrade pip
-        pip install pytest pytest-qt pytest-cov
-        pip install -r requirements-dev.txt || pip install PyQt6 numpy scipy matplotlib
+        python -m pip install --upgrade pip setuptools wheel
+        pip install pytest pytest-qt pytest-cov pytest-xvfb
+        [ -f requirements-dev.txt ] && pip install -r requirements-dev.txt || true
+        [ -f requirements.txt ] && pip install -r requirements.txt || true
+        pip install PyQt6 numpy scipy matplotlib
     
-    - name: Run tests
+    # ============ 运行测试 ============
+    - name: Run tests (Linux)
+      if: runner.os == 'Linux'
       run: |
-        pytest tests/ -v --cov=. --cov-report=xml --cov-report=html || echo "No tests found or tests failed"
+        pytest tests/ -v \
+          --cov=. \
+          --cov-report=xml \
+          --cov-report=html \
+          --junitxml=junit.xml \
+          -o junit_family=legacy
       env:
         QT_QPA_PLATFORM: offscreen
-      continue-on-error: true
+        QT_QPA_PLATFORM_PLUGIN_PATH: ${{ env.pythonLocation }}/lib/python${{ matrix.python-version }}/site-packages/PyQt6/Qt6/plugins
     
-    - name: Upload coverage report
+    - name: Run tests (Windows/macOS)
+      if: runner.os != 'Linux'
+      run: |
+        pytest tests/ -v \
+          --cov=. \
+          --cov-report=xml \
+          --cov-report=html \
+          --junitxml=junit.xml \
+          -o junit_family=legacy
+      env:
+        QT_QPA_PLATFORM: minimal
+    
+    # ============ 上传测试结果 ============
+    - name: Upload test results
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: coverage-report-${{ matrix.python-version }}
-        path: htmlcov/
-        retention-days: 7
+        name: test-results-${{ matrix.os }}-py${{ matrix.python-version }}
+        path: |
+          junit.xml
+          htmlcov/
+        retention-days: 14
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+      with:
+        files: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+        token: ${{ secrets.CODECOV_TOKEN }}
+
+  # ============ 覆盖率报告 ============
+  coverage-report:
+    name: Coverage Report
+    needs: test
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download all coverage artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: test-results-*
+        path: coverage-reports
+        merge-multiple: false
+    
+    - name: Generate Coverage Summary
+      run: |
+        echo "## Test & Coverage Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Test Matrix Results" >> $GITHUB_STEP_SUMMARY
+        echo "| OS | Python | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|----|--------|--------|" >> $GITHUB_STEP_SUMMARY
+        
+        for dir in coverage-reports/test-results-*/; do
+          name=$(basename "$dir")
+          os=$(echo "$name" | cut -d'-' -f3)
+          py=$(echo "$name" | cut -d'-' -f4)
+          
+          if [ -f "$dir/junit.xml" ]; then
+            tests=$(grep -o 'tests="[0-9]*"' "$dir/junit.xml" | head -1 | grep -o '[0-9]*')
+            failures=$(grep -o 'failures="[0-9]*"' "$dir/junit.xml" | head -1 | grep -o '[0-9]*')
+            errors=$(grep -o 'errors="[0-9]*"' "$dir/junit.xml" | head -1 | grep -o '[0-9]*')
+            
+            if [ "$failures" == "0" ] && [ "$errors" == "0" ]; then
+              status="✅ Pass ($tests tests)"
+            else
+              status="❌ Fail ($failures failures, $errors errors)"
+            fi
+          else
+            status="⚠️ No results"
+          fi
+          
+          echo "| $os | $py | $status |" >> $GITHUB_STEP_SUMMARY
+        done
+
+  # ============ 测试总结状态 ============
+  test-summary:
+    name: Test Summary
+    needs: [test, coverage-report]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+    - name: Final Status
+      run: |
+        if [ "${{ needs.test.result }}" == "success" ]; then
+          echo "✅ All tests passed" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ Some tests failed" >> $GITHUB_STEP_SUMMARY
+          exit 1
+        fi
