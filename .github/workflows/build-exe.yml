@@ -1,0 +1,72 @@
+name: Build Windows EXE
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 1.0.0)'
+        required: false
+        default: ''
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
+        pip install -r requirements-dev.txt || pip install PyQt6 numpy scipy matplotlib
+    
+    - name: Build EXE with PyInstaller
+      run: |
+        pyinstaller --noconfirm --onefile --windowed `
+          --name "GPR_GUI" `
+          --add-data "assets;assets" `
+          --add-data "sample_data;sample_data" `
+          --hidden-import PyQt6.sip `
+          --hidden-import numpy `
+          --hidden-import scipy `
+          --hidden-import matplotlib `
+          app_qt.py
+      shell: pwsh
+    
+    - name: Get version
+      id: get_version
+      run: |
+        if ("${{ github.event.inputs.version }}") {
+          echo "VERSION=${{ github.event.inputs.version }}" >> $env:GITHUB_OUTPUT
+        } else {
+          echo "VERSION=$($env:GITHUB_REF_NAME -replace '^v', '')" >> $env:GITHUB_OUTPUT
+        }
+      shell: pwsh
+    
+    - name: Rename EXE with version
+      run: |
+        cd dist
+        Rename-Item -Path "GPR_GUI.exe" -NewName "GPR_GUI_v${{ steps.get_version.outputs.VERSION }}.exe"
+      shell: pwsh
+    
+    - name: Upload EXE artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: GPR_GUI_windows
+        path: dist/GPR_GUI_v*.exe
+    
+    - name: Upload to Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: dist/GPR_GUI_v*.exe
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
